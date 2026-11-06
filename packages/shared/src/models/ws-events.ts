@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { IncidentSchema, IncidentStatusSchema } from './incident';
 import { TelemetryMetricSchema, LogEntrySchema } from './telemetry';
+import { ProjectSchema } from './project';
 
 export const ClientMessageTypeSchema = z.enum([
   'ping',
   'subscribe_incidents',
   'subscribe_telemetry',
+  'subscribe_projects',
   'acknowledge_incident',
   'request_ai_analysis'
 ]);
@@ -18,6 +20,8 @@ export const ServerMessageTypeSchema = z.enum([
   'incident_updated',
   'telemetry_broadcast',
   'log_broadcast',
+  'project_registered',
+  'project_updated',
   'ai_analysis_result',
   'system_health'
 ]);
@@ -30,6 +34,9 @@ export const WsClientMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('subscribe_incidents')
+  }),
+  z.object({
+    type: z.literal('subscribe_projects')
   }),
   z.object({
     type: z.literal('subscribe_telemetry'),
@@ -68,6 +75,14 @@ export const WsServerMessageSchema = z.discriminatedUnion('type', [
     incident: IncidentSchema
   }),
   z.object({
+    type: z.literal('project_registered'),
+    project: ProjectSchema
+  }),
+  z.object({
+    type: z.literal('project_updated'),
+    project: ProjectSchema
+  }),
+  z.object({
     type: z.literal('telemetry_broadcast'),
     metric: TelemetryMetricSchema
   }),
@@ -90,4 +105,3 @@ export const WsServerMessageSchema = z.discriminatedUnion('type', [
   })
 ]);
 export type WsServerMessage = z.infer<typeof WsServerMessageSchema>;
-
