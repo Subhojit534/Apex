@@ -1,0 +1,370 @@
+import { useEffect, useState, useRef, useCallback } from 'react';
+import { Incident, WsServerMessage, WsClientMessage, SystemInfo } from '@apex/shared';
+
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3001/ws';
+const API_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+
+export default function App() {
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
+  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
+  const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+  const [aiAnalysisMap, setAiAnalysisMap] = useState<Record<string, { analysis: string; rootCause: string; mitigations: string[] }>>({});
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  const socketRef = useRef<WebSocket | null>(null);
+
+  // Check Electron Preload API
+  useEffect(() => {
+    if (window.electronAPI) {
+      window.electronAPI.getSystemInfo().then(info => {
+        setSystemInfo(info);
+      }).catch(err => {
+        console.error('Failed to get system info:', err);
+      });
+    }
+  }, []);
+
+  // WebSocket Connection
+  const connectWs = useCallback(() => {
+    setWsStatus('connecting');
+    const ws = new WebSocket(WS_URL);
+    socketRef.current = ws;
+
+    ws.onopen = () => {
+      setWsStatus('connected');
+      const subscribeMsg: WsClientMessage = { type: 'subscribe_incidents' };
+      ws.send(JSON.stringify(subscribeMsg));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg: WsServerMessage = JSON.parse(event.data);
+        if (msg.type === 'incident_created') {
+          setIncidents((prev) => {
+            const exists = prev.some((i) => i.id === msg.incident.id);
+            if (exists) return prev;
+            return [msg.incident, ...prev];
+          });
+        } else if (msg.type === 'incident_updated') {
+          setIncidents((prev) =>
+            prev.map((i) => (i.id === msg.incident.id ? msg.incident : i))
+          );
+          setSelectedIncident((curr) => (curr?.id === msg.incident.id ? msg.incident : curr));
+        } else if (msg.type === 'ai_analysis_result') {
+          setAiAnalysisMap((prev) => ({
+            ...prev,
+            [msg.incidentId]: {
+              analysis: msg.analysis,
+              rootCause: msg.suggestedRootCause,
+              mitigations: msg.recommendedMitigations
+            }
+          }));
+          setIsAnalyzing(false);
+        }
+      } catch (err) {
+        console.error('Failed to parse WS message:', err);
+      }
+    };
+
+    ws.onclose = () => {
+      setWsStatus('disconnected');
+      setTimeout(connectWs, 3000);
+    };
+
+    ws.onerror = (err) => {
+      console.error('WS Error:', err);
+      ws.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    connectWs();
+    return () => {
+      socketRef.current?.close();
+    };
+  }, [connectWs]);
+
+  // Initial fallback fetch
+  useEffect(() => {
+    fetch(`${API_URL}/api/incidents`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data)) {
+          setIncidents(data.data);
+          if (data.data.length > 0) {
+            setSelectedIncident(data.data[0]);
+          }
+        }
+      })
+      .catch((err) => console.warn('Could not fetch initial incidents:', err));
+  }, []);
+
+  const handleRequestAnalysis = (incidentId: string) => {
+    setIsAnalyzing(true);
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      const msg: WsClientMessage = {
+        type: 'request_ai_analysis',
+        incidentId
+      };
+      socketRef.current.send(JSON.stringify(msg));
+    } else {
+      // Fallback to HTTP
+      fetch(`${API_URL}/api/incidents/${incidentId}/analyze`, { method: 'POST' })
+        .then((res) => res.json())
+        .then((res) => {
+          if (res.success) {
+            setAiAnalysisMap((prev) => ({
+              ...prev,
+              [incidentId]: {
+                analysis: res.data.analysis,
+                rootCause: res.data.suggestedRootCause,
+                mitigations: res.data.recommendedMitigations
+              }
+            }));
+          }
+        })
+        .finally(() => setIsAnalyzing(false));
+    }
+  };
+
+  const handleAcknowledge = (incidentId: string) => {
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      const msg: WsClientMessage = {
+        type: 'acknowledge_incident',
+        incidentId,
+        status: 'investigating'
+      };
+      socketRef.current.send(JSON.stringify(msg));
+    }
+  };
+
+  return (
+    <div className="flex h-screen w-screen flex-col bg-slate-950 text-slate-100">
+      {/* Top Navigation Bar */}
+      <header className="flex h-14 items-center justify-between border-b border-slate-800 bg-slate-900/80 px-5 backdrop-blur">
+        <div className="flex items-center space-x-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-500/20">
+            A
+          </div>
+          <div>
+            <h1 className="text-sm font-semibold tracking-wider text-slate-100">
+              APEX <span className="text-xs font-normal text-indigo-400">NOVA Assistant</span>
+            </h1>
+            <p className="text-[10px] text-slate-400">Phase 0 Foundation</p>
+          </div>
+        </div>
+
+        {/* Status Indicators */}
+        <div className="flex items-center space-x-4 text-xs">
+          {systemInfo && (
+            <div className="rounded border border-slate-800 bg-slate-900 px-2.5 py-1 text-slate-300">
+              <span className="text-slate-500">Host:</span> {systemInfo.platform} ({systemInfo.arch}) • {systemInfo.freeMemoryMb}MB Free
+            </div>
+          )}
+
+          <div className="flex items-center space-x-2 rounded border border-slate-800 bg-slate-900 px-2.5 py-1">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                wsStatus === 'connected'
+                  ? 'bg-emerald-400 ring-2 ring-emerald-500/30 animate-pulse'
+                  : wsStatus === 'connecting'
+                  ? 'bg-amber-400'
+                  : 'bg-rose-500'
+              }`}
+            />
+            <span className="capitalize text-slate-300">{wsStatus}</span>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content Workspace */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left: Incident Feed */}
+        <section className="flex w-96 flex-col border-r border-slate-800 bg-slate-900/40">
+          <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              Active Incidents ({incidents.length})
+            </h2>
+            <button
+              onClick={() => {
+                fetch(`${API_URL}/api/incidents`)
+                  .then((r) => r.json())
+                  .then((d) => d.success && setIncidents(d.data));
+              }}
+              className="text-xs text-indigo-400 hover:text-indigo-300"
+            >
+              Refresh
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {incidents.length === 0 ? (
+              <div className="flex h-32 items-center justify-center text-xs text-slate-500">
+                No active incidents detected.
+              </div>
+            ) : (
+              incidents.map((incident) => {
+                const isSelected = selectedIncident?.id === incident.id;
+                const severityColor =
+                  incident.severity === 'critical'
+                    ? 'border-rose-500/50 bg-rose-950/20 text-rose-300'
+                    : incident.severity === 'high'
+                    ? 'border-amber-500/50 bg-amber-950/20 text-amber-300'
+                    : 'border-blue-500/50 bg-blue-950/20 text-blue-300';
+
+                return (
+                  <div
+                    key={incident.id}
+                    onClick={() => setSelectedIncident(incident)}
+                    className={`cursor-pointer rounded-lg border p-3 transition-all ${
+                      isSelected
+                        ? 'border-indigo-500 bg-indigo-950/30'
+                        : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${severityColor}`}>
+                        {incident.severity}
+                      </span>
+                      <span className="text-[10px] text-slate-400 capitalize">
+                        {incident.status}
+                      </span>
+                    </div>
+
+                    <h3 className="mt-2 text-xs font-medium text-slate-200 line-clamp-1">
+                      {incident.title}
+                    </h3>
+
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Service: <span className="text-slate-300">{incident.affectedService}</span>
+                    </p>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </section>
+
+        {/* Right: Selected Incident Inspector & AI Remediation */}
+        <section className="flex flex-1 flex-col overflow-y-auto bg-slate-950 p-6">
+          {selectedIncident ? (
+            <div className="max-w-4xl space-y-6">
+              {/* Incident Header */}
+              <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-3">
+                    <span className="rounded-md bg-indigo-950 border border-indigo-700 px-2 py-1 text-xs font-mono text-indigo-300">
+                      {selectedIncident.affectedService}
+                    </span>
+                    <span className="text-xs text-slate-400">
+                      Detected: {new Date(selectedIncident.detectedAt).toLocaleTimeString()}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    {selectedIncident.status === 'detected' && (
+                      <button
+                        onClick={() => handleAcknowledge(selectedIncident.id)}
+                        className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs text-slate-200 transition"
+                      >
+                        Acknowledge
+                      </button>
+                    )}
+                    <button
+                      disabled={isAnalyzing}
+                      onClick={() => handleRequestAnalysis(selectedIncident.id)}
+                      className="rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 px-3.5 py-1.5 text-xs font-medium text-white shadow-md shadow-indigo-600/30 transition"
+                    >
+                      {isAnalyzing ? 'Analyzing with NOVA AI...' : 'Run Gemini Root-Cause Investigation'}
+                    </button>
+                  </div>
+                </div>
+
+                <h2 className="mt-3 text-lg font-semibold text-white">
+                  {selectedIncident.title}
+                </h2>
+                <p className="mt-1 text-xs text-slate-300 leading-relaxed">
+                  {selectedIncident.description}
+                </p>
+              </div>
+
+              {/* AI Diagnosis Panel */}
+              <div className="rounded-xl border border-indigo-900/40 bg-gradient-to-b from-indigo-950/20 to-slate-900/60 p-5 shadow-sm">
+                <div className="flex items-center space-x-2 text-indigo-400">
+                  <div className="h-2 w-2 rounded-full bg-indigo-400" />
+                  <h3 className="text-xs font-semibold uppercase tracking-wider">
+                    NOVA Intelligence & Root Cause Analysis
+                  </h3>
+                </div>
+
+                {aiAnalysisMap[selectedIncident.id] ? (
+                  <div className="mt-3 space-y-3 text-xs">
+                    <div>
+                      <span className="font-semibold text-slate-300">Summary: </span>
+                      <span className="text-slate-300">{aiAnalysisMap[selectedIncident.id].analysis}</span>
+                    </div>
+
+                    <div className="rounded bg-slate-900/80 p-3 border border-slate-800">
+                      <span className="font-semibold text-indigo-300">Probable Root Cause: </span>
+                      <p className="mt-1 text-slate-200">{aiAnalysisMap[selectedIncident.id].rootCause}</p>
+                    </div>
+
+                    <div>
+                      <span className="font-semibold text-slate-300">Recommended Mitigations:</span>
+                      <ul className="mt-1 list-disc list-inside space-y-1 text-slate-300">
+                        {aiAnalysisMap[selectedIncident.id].mitigations.map((step, idx) => (
+                          <li key={idx}>{step}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                ) : selectedIncident.rootCauseAnalysis ? (
+                  <div className="mt-3 text-xs text-slate-300">
+                    <p className="font-medium text-indigo-300">Pre-computed Analysis:</p>
+                    <p className="mt-1 text-slate-300">{selectedIncident.rootCauseAnalysis}</p>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs text-slate-400 italic">
+                    Click 'Run Gemini Root-Cause Investigation' to invoke server-side Gemini intelligence on this incident.
+                  </p>
+                )}
+              </div>
+
+              {/* Recommended Remediation Actions */}
+              {selectedIncident.recommendedActions.length > 0 && (
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-5">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Remediation Playbook Steps
+                  </h3>
+                  <div className="mt-3 space-y-2">
+                    {selectedIncident.recommendedActions.map((action) => (
+                      <div
+                        key={action.id}
+                        className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/80 p-3 text-xs"
+                      >
+                        <div>
+                          <p className="font-medium text-slate-200">{action.title}</p>
+                          <p className="mt-0.5 text-slate-400">{action.description}</p>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400">
+                            Risk: {action.estimatedRisk}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex h-full items-center justify-center text-xs text-slate-500">
+              Select an incident from the feed to view diagnostics and recommendations.
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}

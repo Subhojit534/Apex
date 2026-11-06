@@ -1,0 +1,23 @@
+{
+  "name": "apex-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "APEX — Autonomous Platform for Engineering eXcellence",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "test": "pnpm --filter \"@apex/incident-core\" run test",
+    "typecheck": "pnpm -r run typecheck",
+    "dev:server": "pnpm --filter \"@apex/server\" run dev",
+    "dev:desktop": "pnpm --filter \"@apex/desktop\" run dev:renderer",
+    "dev:mobile": "pnpm --filter \"@apex/mobile\" run dev",
+    "clean": "pnpm -r run clean"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "protobufjs"
+    ]
+  },
+  "packageManager": "pnpm@10.33.2"
+}
