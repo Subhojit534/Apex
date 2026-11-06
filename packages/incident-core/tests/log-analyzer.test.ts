@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { analyzeLogEntry } from '../src/log-analyzer';
-import { LogEntry } from '@apex/shared';
+import { LogEntry, RemediationActionSchema, CreateIncidentPayloadSchema } from '@apex/shared';
 
 describe('incident-core: log-analyzer', () => {
   it('detects OutOfMemory log signatures and flags critical resource exhaustion incident', () => {
@@ -19,6 +19,18 @@ describe('incident-core: log-analyzer', () => {
     expect(incident?.category).toBe('resource_exhaustion');
     expect(incident?.title).toContain('Process Out of Memory');
     expect(incident?.affectedService).toBe('search-indexer');
+
+    // Verify UUID validity and Zod validation of remediation actions
+    expect(incident!.recommendedActions.length).toBeGreaterThan(0);
+    for (const action of incident!.recommendedActions) {
+      expect(action.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      );
+      expect(RemediationActionSchema.safeParse(action).success).toBe(true);
+    }
+
+    // Verify CreateIncidentPayloadSchema
+    expect(CreateIncidentPayloadSchema.safeParse(incident).success).toBe(true);
   });
 
   it('detects database deadlock log signatures as high severity availability incident', () => {
@@ -49,6 +61,15 @@ describe('incident-core: log-analyzer', () => {
     expect(incident).not.toBeNull();
     expect(incident?.severity).toBe('critical');
     expect(incident?.category).toBe('system_crash');
+
+    // Verify UUID validity and Zod validation of remediation actions
+    expect(incident!.recommendedActions.length).toBeGreaterThan(0);
+    for (const action of incident!.recommendedActions) {
+      expect(action.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      );
+      expect(RemediationActionSchema.safeParse(action).success).toBe(true);
+    }
   });
 
   it('returns null for normal informational or debug logs', () => {
@@ -64,4 +85,3 @@ describe('incident-core: log-analyzer', () => {
     expect(incident).toBeNull();
   });
 });
-

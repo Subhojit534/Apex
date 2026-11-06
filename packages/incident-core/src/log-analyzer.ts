@@ -1,4 +1,5 @@
 import { LogEntry, Incident, IncidentSeverity, IncidentCategory } from '@apex/shared';
+import { generateUuid } from './uuid';
 
 export interface LogSignature {
   pattern: RegExp;
@@ -56,7 +57,7 @@ export function analyzeLogEntry(
         affectedService: entry.service,
         recommendedActions: [
           {
-            id: 'rec-' + Math.random().toString(36).substring(2, 9),
+            id: generateUuid(),
             title: `Inspect log context for ${entry.service}`,
             description: `TraceId: ${entry.traceId || 'N/A'}. Log level: ${entry.level}. Check container health and core dumps.`,
             isSafeToAutomate: false,
@@ -84,7 +85,7 @@ export function analyzeLogEntry(
       affectedService: entry.service,
       recommendedActions: [
         {
-          id: 'rec-' + Math.random().toString(36).substring(2, 9),
+          id: generateUuid(),
           title: `Inspect fatal event on ${entry.service}`,
           description: `Check traceId ${entry.traceId || 'unknown'}. Restart pod if health probes fail.`,
           isSafeToAutomate: false,
@@ -101,4 +102,3 @@ export function analyzeLogEntry(
 
   return null;
 }
-

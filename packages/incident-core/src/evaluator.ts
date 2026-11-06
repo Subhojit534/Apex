@@ -1,4 +1,5 @@
 import { TelemetryMetric, Incident, IncidentSeverity, IncidentCategory } from '@apex/shared';
+import { generateUuid } from './uuid';
 
 export interface MetricRule {
   metric: string;
@@ -39,10 +40,53 @@ export const DEFAULT_RULES: MetricRule[] = [
   }
 ];
 
-export function evaluateMetric(metric: TelemetryMetric, rules: MetricRule[] = DEFAULT_RULES): Omit<Incident, 'id' | 'detectedAt' | 'updatedAt'> | null {
-  const rule = rules.find((r) => r.metric === metric.metric);
-  if (!rule) return null;
+export function isValidRule(rule: MetricRule): boolean {
+  return (
+    typeof rule === 'object' &&
+    rule !== null &&
+    typeof rule.metric === 'string' &&
+    rule.metric.trim().length > 0 &&
+    typeof rule.warningThreshold === 'number' &&
+    Number.isFinite(rule.warningThreshold) &&
+    rule.warningThreshold >= 0 &&
+    typeof rule.criticalThreshold === 'number' &&
+    Number.isFinite(rule.criticalThreshold) &&
+    rule.criticalThreshold >= rule.warningThreshold &&
+    typeof rule.titleTemplate === 'function'
+  );
+}
 
+export function evaluateMetric(
+  metric: TelemetryMetric,
+  rules: MetricRule[] = DEFAULT_RULES
+): Omit<Incident, 'id' | 'detectedAt' | 'updatedAt'> | null {
+  // Reject missing or malformed metric object
+  if (!metric || typeof metric !== 'object') {
+    return null;
+  }
+
+  // Reject invalid, non-finite, or negative metric values
+  if (typeof metric.value !== 'number' || !Number.isFinite(metric.value) || metric.value < 0) {
+    return null;
+  }
+
+  // Ensure service is a valid string
+  if (!metric.service || typeof metric.service !== 'string' || metric.service.trim().length === 0) {
+    return null;
+  }
+
+  // Find matching rule
+  const rule = rules.find((r) => r.metric === metric.metric);
+  if (!rule) {
+    return null;
+  }
+
+  // Validate threshold rule configuration
+  if (!isValidRule(rule)) {
+    return null;
+  }
+
+  // Deterministic severity evaluation
   let severity: IncidentSeverity | null = null;
   if (metric.value >= rule.criticalThreshold) {
     severity = 'critical';
@@ -63,7 +107,7 @@ export function evaluateMetric(metric: TelemetryMetric, rules: MetricRule[] = DE
     affectedService: metric.service,
     recommendedActions: [
       {
-        id: 'rec-' + Math.random().toString(36).substring(2, 9),
+        id: generateUuid(),
         title: `Inspect ${metric.service} telemetry and logs`,
         description: `Check recent deployments and active connections on ${metric.service}.`,
         isSafeToAutomate: false,
@@ -78,4 +122,3 @@ export function evaluateMetric(metric: TelemetryMetric, rules: MetricRule[] = DE
     }
   };
 }
-
