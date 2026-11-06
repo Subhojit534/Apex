@@ -6,6 +6,8 @@ import {
   correlateIncidents,
   isValidRule,
   generateUuid,
+  generateUuidFromCrypto,
+  CryptoLike,
   MetricRule
 } from '../src';
 import {
@@ -17,10 +19,60 @@ import {
 } from '@apex/shared';
 
 describe('incident-core: uuid', () => {
-  it('generates valid RFC4122 v4 UUIDs', () => {
+  const RFC4122_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  it('generates valid RFC4122 v4 UUIDs using standard generateUuid()', () => {
     const uuid = generateUuid();
-    expect(uuid).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    expect(uuid).toMatch(RFC4122_V4_REGEX);
+  });
+
+  it('prefers crypto.randomUUID() when available', () => {
+    const mockRandomUuid = '11111111-2222-4333-8444-555555555555';
+    const mockCrypto: CryptoLike = {
+      randomUUID: () => mockRandomUuid,
+      getRandomValues: () => {
+        throw new Error('Should not be called when randomUUID is present');
+      }
+    };
+
+    const result = generateUuidFromCrypto(mockCrypto);
+    expect(result).toBe(mockRandomUuid);
+    expect(result).toMatch(RFC4122_V4_REGEX);
+  });
+
+  it('falls back to crypto.getRandomValues() when randomUUID is unavailable and produces valid v4 UUID', () => {
+    const mockCrypto: CryptoLike = {
+      randomUUID: undefined,
+      getRandomValues: <T extends ArrayBufferView | null>(arr: T): T => {
+        if (arr && 'byteLength' in arr) {
+          const u8 = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+          for (let i = 0; i < u8.length; i++) {
+            u8[i] = (i * 17 + 23) & 0xff;
+          }
+        }
+        return arr;
+      }
+    };
+
+    const uuid = generateUuidFromCrypto(mockCrypto);
+    expect(uuid).toMatch(RFC4122_V4_REGEX);
+
+    // Verify 14th character is '4' (version 4)
+    expect(uuid.charAt(14)).toBe('4');
+    // Verify 19th character is in [8, 9, a, b] (variant 1)
+    expect(['8', '9', 'a', 'b', '8', '9', 'A', 'B']).toContain(uuid.charAt(19).toLowerCase());
+  });
+
+  it('throws descriptive error if neither randomUUID nor getRandomValues is available', () => {
+    const emptyCrypto: CryptoLike = {};
+    expect(() => generateUuidFromCrypto(emptyCrypto)).toThrow(
+      /Cryptographically secure random number generator is not available/
+    );
+  });
+
+  it('throws descriptive error if crypto provider is undefined', () => {
+    expect(() => generateUuidFromCrypto(undefined)).toThrow(
+      /Cryptographically secure random number generator is not available/
     );
   });
 });

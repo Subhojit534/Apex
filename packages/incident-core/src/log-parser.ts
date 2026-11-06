@@ -242,3 +242,4 @@ export function parseLogs(content: string, format: LogFormat = 'auto', defaultSe
       return parseTxtLogs(content, defaultService);
   }
 }
+

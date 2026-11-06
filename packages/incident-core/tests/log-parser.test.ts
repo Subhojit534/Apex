@@ -104,3 +104,4 @@ describe('incident-core: log-parser', () => {
     expect(parseLogs(txtStr).length).toBe(1);
   });
 });
+
