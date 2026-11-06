@@ -29,3 +29,4 @@ export const CreateProjectPayloadSchema = ProjectSchema.omit({
   createdAt: true
 });
 export type CreateProjectPayload = z.infer<typeof CreateProjectPayloadSchema>;
+

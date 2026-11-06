@@ -64,3 +64,4 @@ describe('incident-core: log-analyzer', () => {
     expect(incident).toBeNull();
   });
 });
+
