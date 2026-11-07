@@ -466,7 +466,7 @@ export function createVercelRouter(_wsManager: ApexWebSocketManager): Router {
    * Generates a realistic simulated production outage log for the chosen project,
    * enabling full verification of APEX Agent analysis without breaking real production.
    */
-  router.get('/projects/:projectId/sample-logs', (req: Request, res: Response): void => {
+  router.get('/projects/:projectId/sample-logs', (req: any, res: any): void => {
     const rawProjectId = req.params.projectId;
     const projectId = Array.isArray(rawProjectId) ? rawProjectId[0] : rawProjectId;
     const projectName = (req.query.projectName as string) || projectId;

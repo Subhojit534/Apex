@@ -1,5 +1,4 @@
 import { Incident, TelemetryMetric } from '@apex/shared';
-import { generateUuid } from '@apex/incident-core';
 
 class ApexStore {
   private incidents: Map<string, Incident> = new Map();

@@ -6,16 +6,23 @@ import { analyzeIncident } from './gemini';
 import { transitionIncident } from '@apex/incident-core';
 
 export class ApexWebSocketManager {
-  private wss: WebSocketServer;
+  private wss: WebSocketServer | null = null;
   private clients: Set<WebSocket> = new Set();
   private startTime = Date.now();
 
-  constructor(server: HttpServer) {
-    this.wss = new WebSocketServer({ server, path: '/ws' });
-    this.setupListeners();
+  constructor(server?: HttpServer) {
+    if (!process.env.VERCEL && server) {
+      try {
+        this.wss = new WebSocketServer({ server, path: '/ws' });
+        this.setupListeners();
+      } catch (err) {
+        console.warn('[WS] WebSocketServer initialization skipped in this environment:', err);
+      }
+    }
   }
 
   private setupListeners() {
+    if (!this.wss) return;
     this.wss.on('connection', (ws: WebSocket) => {
       this.clients.add(ws);
       const clientId = 'client-' + Math.random().toString(36).substring(2, 9);
