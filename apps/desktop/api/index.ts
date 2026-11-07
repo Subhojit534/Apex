@@ -338,8 +338,14 @@ router.get('/vercel/projects/:projectId/sample-logs', (req: any, res: any): void
 app.use('/api', router);
 app.use('/', router);
 
-// Export serverless handler
+// Export serverless handler compatible with both CommonJS and ESM
 export default function handler(req: any, res: any) {
   return app(req, res);
+}
+
+// Dual export for Vercel Node runtime
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = handler;
+  module.exports.default = handler;
 }
 
