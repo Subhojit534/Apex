@@ -658,14 +658,14 @@ export default function LogInvestigationPanel({
                 <div className="space-y-4">
 
                   {/* Connected Account Bar */}
-                  <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-2.5">
-                    <div className="flex items-center gap-2.5">
-                      <div className="h-7 w-7 rounded-full bg-violet-800/80 border border-violet-500 flex items-center justify-center text-xs font-bold text-white">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-xl border border-slate-800 bg-slate-900/60 p-3 sm:px-4 sm:py-2.5">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="h-7 w-7 rounded-full bg-violet-800/80 border border-violet-500 flex items-center justify-center text-xs font-bold text-white shrink-0">
                         {vercelUser?.username?.charAt(0).toUpperCase() || 'V'}
                       </div>
-                      <div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-semibold text-slate-200">
+                      <div className="truncate">
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span className="text-xs font-semibold text-slate-200 truncate">
                             {vercelUser?.name || vercelUser?.username}
                           </span>
                           <span className="text-[10px] text-slate-400 font-mono">
@@ -675,13 +675,13 @@ export default function LogInvestigationPanel({
                         <p className="text-[10px] text-slate-500">{projects.length} Vercel projects loaded</p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
                       <button
                         onClick={fetchProjects}
                         disabled={isLoadingProjects}
-                        className="rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 px-2 py-1 text-[11px] text-slate-300 transition"
+                        className="rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 px-2.5 py-1 text-[11px] text-slate-300 transition"
                       >
-                        {isLoadingProjects ? 'Refreshing…' : '↻ Refresh Projects'}
+                        {isLoadingProjects ? 'Refreshing…' : '↻ Refresh'}
                       </button>
                       <button
                         onClick={handleDisconnectVercel}
@@ -693,8 +693,8 @@ export default function LogInvestigationPanel({
                   </div>
 
                   {/* Project Selector Section */}
-                  <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
-                    <div className="flex items-center justify-between">
+                  <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 sm:p-4 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                       <label className="text-xs font-semibold uppercase tracking-wider text-slate-300">
                         Select Vercel Project
                       </label>
@@ -703,7 +703,7 @@ export default function LogInvestigationPanel({
                         placeholder="Filter projects..."
                         value={projectSearch}
                         onChange={e => setProjectSearch(e.target.value)}
-                        className="w-48 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-violet-500"
+                        className="w-full sm:w-48 rounded border border-slate-700 bg-slate-950 px-2.5 py-1.5 sm:py-1 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-violet-500"
                       />
                     </div>
 

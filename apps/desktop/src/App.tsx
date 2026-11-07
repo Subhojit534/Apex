@@ -21,6 +21,7 @@ export default function App() {
   const [aiAnalysisMap, setAiAnalysisMap] = useState<Record<string, { analysis: string; rootCause: string; mitigations: string[] }>>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [viewMode, setViewMode] = useState<'inspector' | 'logs'>('inspector');
+  const [mobileShowingDetails, setMobileShowingDetails] = useState<boolean>(false);
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [supabaseClient, setSupabaseClient] = useState<SupabaseClient | null>(null);
 
@@ -46,6 +47,7 @@ export default function App() {
     if (target) {
       setSelectedIncident(target);
       setViewMode('inspector');
+      setMobileShowingDetails(true);
     } else {
       fetch(`${API_URL}/api/incidents/${incidentId}`)
         .then((res) => res.json())
@@ -53,6 +55,7 @@ export default function App() {
           if (d.success && d.data) {
             setSelectedIncident(d.data);
             setViewMode('inspector');
+            setMobileShowingDetails(true);
           }
         })
         .catch((err) => console.warn('Could not fetch incident:', err));
@@ -195,81 +198,122 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen flex-col bg-slate-950 text-slate-100">
+    <div className="flex h-screen w-screen flex-col bg-slate-950 text-slate-100 overflow-hidden">
       {/* Top Navigation Bar */}
-      <header className="flex h-14 items-center justify-between border-b border-slate-800 bg-slate-900/80 px-5 backdrop-blur">
-        <div className="flex items-center space-x-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-500/20">
-            A
+      <header className="border-b border-slate-800 bg-slate-900/90 px-3 sm:px-5 backdrop-blur shrink-0">
+        <div className="flex h-14 items-center justify-between gap-2">
+          {/* Logo & Title */}
+          <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-500/20">
+              A
+            </div>
+            <div className="truncate">
+              <h1 className="text-xs sm:text-sm font-semibold tracking-wider text-slate-100 flex items-center gap-1.5 truncate">
+                <span>APEX</span>
+                <span className="hidden sm:inline text-xs font-normal text-indigo-400">NOVA Assistant</span>
+              </h1>
+              <p className="hidden sm:block text-[10px] text-slate-400">Phase 0 Foundation</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-sm font-semibold tracking-wider text-slate-100">
-              APEX <span className="text-xs font-normal text-indigo-400">NOVA Assistant</span>
-            </h1>
-            <p className="text-[10px] text-slate-400">Phase 0 Foundation</p>
+
+          {/* Center: View Switcher (Desktop) */}
+          <div className="hidden md:flex items-center space-x-1 rounded-lg bg-slate-950 p-1 border border-slate-800">
+            <button
+              onClick={() => {
+                setViewMode('inspector');
+                setMobileShowingDetails(false);
+              }}
+              className={`rounded px-3 py-1 text-xs font-medium transition ${
+                viewMode === 'inspector'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Incident Inspector
+            </button>
+            <button
+              onClick={() => setViewMode('logs')}
+              className={`rounded px-3 py-1 text-xs font-medium transition flex items-center space-x-1.5 ${
+                viewMode === 'logs'
+                  ? 'bg-violet-600 text-white shadow-md shadow-violet-600/30 font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <span>Log Investigation</span>
+              <span className="rounded bg-violet-900/60 border border-violet-700/50 px-1.5 py-0.2 text-[9px] font-mono text-violet-300">
+                Pipeline
+              </span>
+            </button>
+          </div>
+
+          {/* Right: Status Indicators & Auth */}
+          <div className="flex items-center space-x-2 sm:space-x-3 text-xs shrink-0">
+            {systemInfo && (
+              <div className="hidden lg:block rounded border border-slate-800 bg-slate-900 px-2.5 py-1 text-slate-300 text-[11px]">
+                <span className="text-slate-500">Host:</span> {systemInfo.platform} ({systemInfo.arch})
+              </div>
+            )}
+
+            <div className="flex items-center space-x-1.5 rounded border border-slate-800 bg-slate-900 px-2 py-1 text-[11px]">
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  wsStatus === 'connected'
+                    ? 'bg-emerald-400 ring-2 ring-emerald-500/30 animate-pulse'
+                    : wsStatus === 'connecting'
+                    ? 'bg-amber-400'
+                    : 'bg-rose-500'
+                }`}
+              />
+              <span className="capitalize text-slate-300 hidden sm:inline">{wsStatus}</span>
+            </div>
+
+            {/* Supabase Google Auth */}
+            <SupabaseAuthBar
+              onUserChange={handleUserChange}
+              onVercelTokenSynced={handleVercelTokenSynced}
+            />
           </div>
         </div>
 
-        {/* Center: View Switcher */}
-        <div className="flex items-center space-x-1 rounded-lg bg-slate-950 p-1 border border-slate-800">
+        {/* Mobile View Switcher Sub-bar (< md) */}
+        <div className="flex md:hidden border-t border-slate-800/70 py-1.5 gap-1.5">
           <button
-            onClick={() => setViewMode('inspector')}
-            className={`rounded px-3 py-1 text-xs font-medium transition ${
+            onClick={() => {
+              setViewMode('inspector');
+              setMobileShowingDetails(false);
+            }}
+            className={`flex-1 rounded-lg py-1.5 text-xs font-medium text-center transition ${
               viewMode === 'inspector'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-indigo-600 text-white shadow-md font-semibold'
+                : 'bg-slate-950/60 text-slate-400 hover:text-slate-200 border border-slate-800'
             }`}
           >
             Incident Inspector
           </button>
           <button
             onClick={() => setViewMode('logs')}
-            className={`rounded px-3 py-1 text-xs font-medium transition flex items-center space-x-1.5 ${
+            className={`flex-1 rounded-lg py-1.5 text-xs font-medium text-center transition flex items-center justify-center gap-1.5 ${
               viewMode === 'logs'
-                ? 'bg-violet-600 text-white shadow-md shadow-violet-600/30'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-violet-600 text-white shadow-md font-semibold'
+                : 'bg-slate-950/60 text-slate-400 hover:text-slate-200 border border-slate-800'
             }`}
           >
             <span>Log Investigation</span>
-            <span className="rounded bg-violet-900/60 border border-violet-700/50 px-1.5 py-0.2 text-[9px] font-mono text-violet-300">
-              Pipeline
+            <span className="rounded bg-violet-900/80 px-1 py-0.2 text-[9px] font-mono text-violet-200">
+              Vercel
             </span>
           </button>
-        </div>
-
-        {/* Status Indicators */}
-        <div className="flex items-center space-x-4 text-xs">
-          {systemInfo && (
-            <div className="rounded border border-slate-800 bg-slate-900 px-2.5 py-1 text-slate-300">
-              <span className="text-slate-500">Host:</span> {systemInfo.platform} ({systemInfo.arch}) • {systemInfo.freeMemoryMb}MB Free
-            </div>
-          )}
-
-          <div className="flex items-center space-x-2 rounded border border-slate-800 bg-slate-900 px-2.5 py-1">
-            <span
-              className={`h-2 w-2 rounded-full ${
-                wsStatus === 'connected'
-                  ? 'bg-emerald-400 ring-2 ring-emerald-500/30 animate-pulse'
-                  : wsStatus === 'connecting'
-                  ? 'bg-amber-400'
-                  : 'bg-rose-500'
-              }`}
-            />
-            <span className="capitalize text-slate-300">{wsStatus}</span>
-          </div>
-
-          {/* Supabase Google Auth */}
-          <SupabaseAuthBar
-            onUserChange={handleUserChange}
-            onVercelTokenSynced={handleVercelTokenSynced}
-          />
         </div>
       </header>
 
       {/* Main Content Workspace */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         {/* Left: Incident Feed */}
-        <section className="flex w-96 flex-col border-r border-slate-800 bg-slate-900/40">
+        <section
+          className={`flex flex-col border-r border-slate-800 bg-slate-900/40 md:w-80 lg:w-96 shrink-0 transition-all ${
+            viewMode === 'inspector' && mobileShowingDetails ? 'hidden md:flex' : 'w-full md:flex'
+          }`}
+        >
           <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
               Active Incidents ({incidents.length})
@@ -307,6 +351,7 @@ export default function App() {
                     onClick={() => {
                       setSelectedIncident(incident);
                       setViewMode('inspector');
+                      setMobileShowingDetails(true);
                     }}
                     className={`cursor-pointer rounded-lg border p-3 transition-all ${
                       isSelected
@@ -339,7 +384,7 @@ export default function App() {
 
         {/* Right: Log Investigation OR Selected Incident Inspector */}
         {viewMode === 'logs' ? (
-          <section className="flex flex-1 flex-col overflow-hidden bg-slate-950">
+          <section className="flex flex-1 flex-col overflow-hidden bg-slate-950 w-full">
             <LogInvestigationPanel
               onSelectIncident={handleSelectIncidentFromLog}
               currentUser={authUser}
@@ -347,13 +392,27 @@ export default function App() {
             />
           </section>
         ) : (
-          <section className="flex flex-1 flex-col overflow-y-auto bg-slate-950 p-6">
+          <section
+            className={`flex-1 flex-col overflow-y-auto bg-slate-950 p-4 sm:p-6 w-full ${
+              !mobileShowingDetails ? 'hidden md:flex' : 'flex'
+            }`}
+          >
+            {/* Mobile Back Button */}
+            <div className="md:hidden pb-2">
+              <button
+                onClick={() => setMobileShowingDetails(false)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/90 px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white transition shadow-sm"
+              >
+                ← Back to Active Incidents
+              </button>
+            </div>
+
             {selectedIncident ? (
-            <div className="max-w-4xl space-y-6">
+            <div className="max-w-4xl space-y-4 sm:space-y-6">
               {/* Incident Header */}
-              <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
+              <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 sm:p-5 shadow-sm space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center space-x-2 sm:space-x-3">
                     <span className="rounded-md bg-indigo-950 border border-indigo-700 px-2 py-1 text-xs font-mono text-indigo-300">
                       {selectedIncident.affectedService}
                     </span>
@@ -362,11 +421,11 @@ export default function App() {
                     </span>
                   </div>
 
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2 w-full sm:w-auto">
                     {selectedIncident.status === 'detected' && (
                       <button
                         onClick={() => handleAcknowledge(selectedIncident.id)}
-                        className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs text-slate-200 transition"
+                        className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 sm:py-1.5 text-xs text-slate-200 transition"
                       >
                         Acknowledge
                       </button>
@@ -374,14 +433,14 @@ export default function App() {
                     <button
                       disabled={isAnalyzing}
                       onClick={() => handleRequestAnalysis(selectedIncident.id)}
-                      className="rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 px-3.5 py-1.5 text-xs font-medium text-white shadow-md shadow-indigo-600/30 transition"
+                      className="flex-1 sm:flex-initial rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 px-3.5 py-2 sm:py-1.5 text-xs font-medium text-white shadow-md shadow-indigo-600/30 transition text-center"
                     >
                       {isAnalyzing ? 'Analyzing with NOVA AI...' : 'Run Gemini Root-Cause Investigation'}
                     </button>
                   </div>
                 </div>
 
-                <h2 className="mt-3 text-lg font-semibold text-white">
+                <h2 className="text-base sm:text-lg font-semibold text-white">
                   {selectedIncident.title}
                 </h2>
                 <p className="mt-1 text-xs text-slate-300 leading-relaxed">

@@ -163,29 +163,31 @@ export default function SupabaseAuthBar({
       <div className="flex items-center gap-2">
         {user ? (
           /* Logged In State: Avatar + Name + Synced badge + Sign out */
-          <div className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/90 px-3 py-1 shadow-sm">
+          <div className="flex items-center gap-1.5 sm:gap-2 rounded-lg border border-slate-700 bg-slate-900/90 px-2 sm:px-3 py-1 shadow-sm max-w-[200px] sm:max-w-none">
             {avatarUrl ? (
               <img
                 src={avatarUrl}
                 alt={userFullName}
-                className="h-6 w-6 rounded-full object-cover border border-slate-600"
+                className="h-6 w-6 rounded-full object-cover border border-slate-600 shrink-0"
               />
             ) : (
-              <div className="h-6 w-6 rounded-full bg-violet-600 text-xs font-bold text-white flex items-center justify-center">
+              <div className="h-6 w-6 rounded-full bg-violet-600 text-xs font-bold text-white flex items-center justify-center shrink-0">
                 {userFullName.charAt(0).toUpperCase()}
               </div>
             )}
-            <div className="flex flex-col text-left">
-              <span className="text-xs font-semibold text-slate-100 leading-tight">
+            <div className="flex flex-col text-left truncate min-w-0">
+              <span className="text-xs font-semibold text-slate-100 leading-tight truncate">
                 {userFullName}
               </span>
-              <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-medium">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> Google Synced
+              <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-medium truncate">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                <span className="hidden sm:inline">Google Synced</span>
+                <span className="sm:hidden">Synced</span>
               </span>
             </div>
             <button
               onClick={handleSignOut}
-              className="ml-2 rounded border border-slate-700 hover:border-rose-700 bg-slate-800 hover:bg-rose-950/40 px-2 py-0.5 text-[10px] text-slate-300 hover:text-rose-300 transition"
+              className="ml-1 sm:ml-2 rounded border border-slate-700 hover:border-rose-700 bg-slate-800 hover:bg-rose-950/40 px-1.5 sm:px-2 py-0.5 text-[10px] text-slate-300 hover:text-rose-300 transition shrink-0"
               title="Sign Out"
             >
               Sign out
@@ -193,13 +195,13 @@ export default function SupabaseAuthBar({
           </div>
         ) : (
           /* Logged Out: Official Google Sign-In Button */
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1 sm:gap-1.5">
             <button
               onClick={handleGoogleSignIn}
               disabled={isLoading}
-              className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-800 px-3 py-1.5 text-xs font-semibold transition shadow-md hover:shadow-lg disabled:opacity-50"
+              className="flex items-center gap-1.5 sm:gap-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-800 px-2 sm:px-3 py-1.5 text-xs font-semibold transition shadow-md hover:shadow-lg disabled:opacity-50 shrink-0"
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                 <path
                   fill="#4285F4"
                   d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -217,12 +219,13 @@ export default function SupabaseAuthBar({
                   d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                 />
               </svg>
-              <span>{isLoading ? 'Connecting...' : 'Sign in with Google'}</span>
+              <span className="hidden sm:inline">{isLoading ? 'Connecting...' : 'Sign in with Google'}</span>
+              <span className="sm:hidden">{isLoading ? '...' : 'Google Sign-in'}</span>
             </button>
 
             <button
               onClick={() => setShowConfigModal(true)}
-              className="rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 p-1.5 text-slate-400 hover:text-slate-200 transition"
+              className="rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 p-1.5 text-slate-400 hover:text-slate-200 transition shrink-0"
               title="Supabase Settings"
             >
               ⚙
