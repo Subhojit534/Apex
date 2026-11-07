@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { CreateIncidentPayloadSchema, Incident } from '@apex/shared';
+import { generateUuid } from '@apex/incident-core';
 import { store } from '../store';
 import { analyzeIncident } from '../gemini';
 import { ApexWebSocketManager } from '../websocket';
@@ -34,7 +35,7 @@ export function createIncidentsRouter(wsManager: ApexWebSocketManager): Router {
     const now = new Date().toISOString();
     const newIncident: Incident = {
       ...parse.data,
-      id: 'inc-' + Math.random().toString(36).substring(2, 10),
+      id: generateUuid(),
       detectedAt: now,
       updatedAt: now,
       recommendedActions: parse.data.recommendedActions || [],

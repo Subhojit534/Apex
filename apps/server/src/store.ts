@@ -1,4 +1,5 @@
 import { Incident, TelemetryMetric } from '@apex/shared';
+import { generateUuid } from '@apex/incident-core';
 
 class ApexStore {
   private incidents: Map<string, Incident> = new Map();
@@ -22,14 +23,14 @@ class ApexStore {
       rootCauseAnalysis: 'Database connection pool starvation during batch settlement processing.',
       recommendedActions: [
         {
-          id: 'rec-001',
+          id: 'a1b2c3d4-e5f6-4789-abcd-ef0123456789',
           title: 'Increase connection pool ceiling',
           description: 'Scale connection pool max limit from 20 to 50.',
           isSafeToAutomate: false,
           estimatedRisk: 'low'
         },
         {
-          id: 'rec-002',
+          id: 'b2c3d4e5-f6a7-4890-bcde-f01234567890',
           title: 'Throttle non-critical reconciliation jobs',
           description: 'Pause async reconciliation cron until checkout traffic subsides.',
           isSafeToAutomate: true,
