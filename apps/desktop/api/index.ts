@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express from 'express';
 import cors from 'cors';
 import { Incident } from '@apex/shared';
 
@@ -49,15 +49,15 @@ const incidentsMap = new Map<string, Incident>([[sampleIncident.id, sampleIncide
 let runtimeVercelToken: string | null = process.env.VERCEL_TOKEN || null;
 let runtimeVercelTeamId: string | null = process.env.VERCEL_TEAM_ID || null;
 
-function getVercelToken(req: Request): string | null {
+function getVercelToken(req: any): string | null {
   const headerToken = req.headers['x-vercel-token'] as string | undefined;
-  const queryToken = req.query.token as string | undefined;
+  const queryToken = req.query?.token as string | undefined;
   return headerToken || queryToken || runtimeVercelToken || process.env.VERCEL_TOKEN || null;
 }
 
-function getVercelTeamId(req: Request): string | null {
+function getVercelTeamId(req: any): string | null {
   const headerTeam = req.headers['x-vercel-team-id'] as string | undefined;
-  const queryTeam = req.query.teamId as string | undefined;
+  const queryTeam = req.query?.teamId as string | undefined;
   return headerTeam || queryTeam || runtimeVercelTeamId || process.env.VERCEL_TEAM_ID || null;
 }
 
@@ -96,7 +96,7 @@ async function vercelFetch<T>(path: string, options: { token: string; teamId?: s
 const router = express.Router();
 
 // Health check
-router.get('/health', (_req: Request, res: Response) => {
+router.get('/health', (_req: any, res: any) => {
   const activeIncidents = Array.from(incidentsMap.values()).filter(
     (i) => i.status !== 'resolved' && i.status !== 'closed'
   );
@@ -112,7 +112,7 @@ router.get('/health', (_req: Request, res: Response) => {
 });
 
 // Incidents List
-router.get('/incidents', (_req: Request, res: Response) => {
+router.get('/incidents', (_req: any, res: any) => {
   const list = Array.from(incidentsMap.values()).sort(
     (a, b) => new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime()
   );
@@ -120,7 +120,7 @@ router.get('/incidents', (_req: Request, res: Response) => {
 });
 
 // Single Incident
-router.get('/incidents/:id', (req: Request, res: Response): void => {
+router.get('/incidents/:id', (req: any, res: any): void => {
   const incident = incidentsMap.get(req.params.id);
   if (!incident) {
     res.status(404).json({ success: false, error: 'Incident not found' });
@@ -130,7 +130,7 @@ router.get('/incidents/:id', (req: Request, res: Response): void => {
 });
 
 // Acknowledge Incident
-router.post('/incidents/:id/acknowledge', (req: Request, res: Response): void => {
+router.post('/incidents/:id/acknowledge', (req: any, res: any): void => {
   const incident = incidentsMap.get(req.params.id);
   if (!incident) {
     res.status(404).json({ success: false, error: 'Incident not found' });
@@ -143,7 +143,7 @@ router.post('/incidents/:id/acknowledge', (req: Request, res: Response): void =>
 });
 
 // Resolve Incident
-router.post('/incidents/:id/resolve', (req: Request, res: Response): void => {
+router.post('/incidents/:id/resolve', (req: any, res: any): void => {
   const incident = incidentsMap.get(req.params.id);
   if (!incident) {
     res.status(404).json({ success: false, error: 'Incident not found' });
@@ -157,7 +157,7 @@ router.post('/incidents/:id/resolve', (req: Request, res: Response): void => {
 });
 
 // AI Analyze Incident
-router.post('/incidents/:id/analyze', (req: Request, res: Response): void => {
+router.post('/incidents/:id/analyze', (req: any, res: any): void => {
   const incident = incidentsMap.get(req.params.id);
   if (!incident) {
     res.status(404).json({ success: false, error: 'Incident not found' });
@@ -184,7 +184,7 @@ router.post('/incidents/:id/analyze', (req: Request, res: Response): void => {
 });
 
 // Sync Vercel Token
-router.post('/vercel/token', (req: Request, res: Response) => {
+router.post('/vercel/token', (req: any, res: any) => {
   const { token, teamId } = req.body;
   if (typeof token === 'string' && token.trim()) {
     runtimeVercelToken = token.trim();
@@ -196,7 +196,7 @@ router.post('/vercel/token', (req: Request, res: Response) => {
 });
 
 // Vercel Projects
-router.get('/vercel/projects', async (req: Request, res: Response): Promise<void> => {
+router.get('/vercel/projects', async (req: any, res: any): Promise<void> => {
   const token = getVercelToken(req);
   const teamId = getVercelTeamId(req);
 
@@ -223,7 +223,7 @@ router.get('/vercel/projects', async (req: Request, res: Response): Promise<void
 });
 
 // Vercel Deployments
-router.get('/vercel/projects/:projectId/deployments', async (req: Request, res: Response): Promise<void> => {
+router.get('/vercel/projects/:projectId/deployments', async (req: any, res: any): Promise<void> => {
   const token = getVercelToken(req);
   const teamId = getVercelTeamId(req);
   const projectId = req.params.projectId;
@@ -257,7 +257,7 @@ router.get('/vercel/projects/:projectId/deployments', async (req: Request, res: 
 });
 
 // Vercel Logs
-router.get('/vercel/projects/:projectId/logs', async (req: Request, res: Response): Promise<void> => {
+router.get('/vercel/projects/:projectId/logs', async (req: any, res: any): Promise<void> => {
   const token = getVercelToken(req);
   const teamId = getVercelTeamId(req);
   const projectId = req.params.projectId;
@@ -308,7 +308,7 @@ router.get('/vercel/projects/:projectId/logs', async (req: Request, res: Respons
 });
 
 // Vercel Simulated Sample Logs
-router.get('/vercel/projects/:projectId/sample-logs', (req: Request, res: Response): void => {
+router.get('/vercel/projects/:projectId/sample-logs', (req: any, res: any): void => {
   const projectId = req.params.projectId;
   const projectName = (req.query.projectName as string) || projectId;
   const now = new Date();
@@ -339,6 +339,7 @@ app.use('/api', router);
 app.use('/', router);
 
 // Export serverless handler
-export default function handler(req: Request, res: Response) {
+export default function handler(req: any, res: any) {
   return app(req, res);
 }
+
