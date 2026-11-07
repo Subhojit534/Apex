@@ -5,7 +5,27 @@
   "framework": "vite",
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/api/(.*)",
+      "destination": "/api"
+    },
+    {
+      "source": "/api",
+      "destination": "/api"
+    },
+    {
+      "source": "/health",
+      "destination": "/api"
+    },
+    {
+      "source": "/sw.js",
+      "destination": "/sw.js"
+    },
+    {
+      "source": "/manifest.json",
+      "destination": "/manifest.json"
+    },
+    {
+      "source": "/((?!api|sw.js|manifest.json).*)",
       "destination": "/index.html"
     }
   ]

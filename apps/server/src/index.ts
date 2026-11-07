@@ -35,12 +35,19 @@ app.use((req, res, next) => {
 // WebSocket Manager
 export const wsManager = new ApexWebSocketManager(server);
 
-// REST Routes
+// REST Routes (mounted with and without /api prefix for dual local & Vercel serverless compatibility)
+const incidentsRouter = createIncidentsRouter(wsManager);
+const logsRouter = createLogsRouter(wsManager);
+const vercelRouter = createVercelRouter(wsManager);
+
 app.use('/', healthRouter);
 app.use('/api', healthRouter);
-app.use('/api', createIncidentsRouter(wsManager));
-app.use('/api', createLogsRouter(wsManager));
-app.use('/api/vercel', createVercelRouter(wsManager));
+app.use('/api', incidentsRouter);
+app.use('/', incidentsRouter);
+app.use('/api', logsRouter);
+app.use('/', logsRouter);
+app.use('/api/vercel', vercelRouter);
+app.use('/vercel', vercelRouter);
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '0.0.0.0';

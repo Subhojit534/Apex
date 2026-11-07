@@ -2,6 +2,12 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { Incident, WsServerMessage, WsClientMessage, SystemInfo, User, SupabaseClient } from '@apex/shared';
 import LogInvestigationPanel from './LogInvestigationPanel';
 import SupabaseAuthBar from './SupabaseAuthBar';
+import {
+  registerNotificationServiceWorker,
+  requestNotificationPermission,
+  getNotificationPermission,
+  sendDeviceNotification,
+} from './notifications';
 
 const isLocal = typeof window !== 'undefined' && (
   window.location.hostname === 'localhost' ||
@@ -24,6 +30,50 @@ export default function App() {
   const [mobileShowingDetails, setMobileShowingDetails] = useState<boolean>(false);
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [supabaseClient, setSupabaseClient] = useState<SupabaseClient | null>(null);
+
+  // Mobile & Desktop Real Notification State
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>(() => getNotificationPermission());
+  const [isTestingNotif, setIsTestingNotif] = useState<boolean>(false);
+  const knownIncidentIdsRef = useRef<Set<string>>(new Set());
+
+  // Register ServiceWorker on startup
+  useEffect(() => {
+    registerNotificationServiceWorker();
+    setNotifPermission(getNotificationPermission());
+  }, []);
+
+  const handleEnableNotifications = async () => {
+    const granted = await requestNotificationPermission();
+    setNotifPermission(granted ? 'granted' : 'denied');
+    if (granted) {
+      await sendDeviceNotification('🔔 APEX Mobile Notifications Enabled!', {
+        body: 'Real-time alerts are now active on your phone. You will be alerted whenever an incident triggers.',
+        severity: 'low',
+        tag: 'apex-welcome'
+      });
+    }
+  };
+
+  const handleTestNotification = async () => {
+    setIsTestingNotif(true);
+    let perm = notifPermission;
+    if (perm !== 'granted') {
+      const granted = await requestNotificationPermission();
+      perm = granted ? 'granted' : 'denied';
+      setNotifPermission(perm);
+      if (!granted) {
+        setIsTestingNotif(false);
+        return;
+      }
+    }
+
+    await sendDeviceNotification('🚨 [CRITICAL] 504 Gateway Timeout Spiked', {
+      body: 'Service payment-gateway p99 exceeded 2100ms. Tap to open APEX investigation on your phone.',
+      severity: 'critical',
+      tag: 'test-alert-' + Date.now()
+    });
+    setIsTestingNotif(false);
+  };
 
   const handleUserChange = useCallback((u: User | null, client: SupabaseClient | null) => {
     setAuthUser(u);
@@ -99,6 +149,14 @@ export default function App() {
             if (exists) return prev;
             return [msg.incident, ...prev];
           });
+          if (!knownIncidentIdsRef.current.has(msg.incident.id)) {
+            knownIncidentIdsRef.current.add(msg.incident.id);
+            sendDeviceNotification(`🚨 [${msg.incident.severity.toUpperCase()}] ${msg.incident.title}`, {
+              body: `${msg.incident.affectedService}: ${msg.incident.description}`,
+              severity: msg.incident.severity,
+              tag: msg.incident.id,
+            });
+          }
         } else if (msg.type === 'incident_updated') {
           setIncidents((prev) =>
             prev.map((i) => (i.id === msg.incident.id ? msg.incident : i))
@@ -143,19 +201,46 @@ export default function App() {
     };
   }, [connectWs]);
 
-  // Initial fallback fetch
+  // Polling fallback: syncs incidents every 6 seconds to keep alerts live even on Vercel or when mobile browsers sleep WS
   useEffect(() => {
-    fetch(`${API_URL}/api/incidents`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && Array.isArray(data.data)) {
-          setIncidents(data.data);
-          if (data.data.length > 0) {
-            setSelectedIncident(data.data[0]);
+    let isMounted = true;
+    const fetchIncidents = () => {
+      fetch(`${API_URL}/api/incidents`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (!isMounted) return;
+          if (data.success && Array.isArray(data.data)) {
+            setIncidents(() => {
+              if (knownIncidentIdsRef.current.size > 0) {
+                data.data.forEach((inc: any) => {
+                  if (!knownIncidentIdsRef.current.has(inc.id)) {
+                    knownIncidentIdsRef.current.add(inc.id);
+                    sendDeviceNotification(`🚨 [${(inc.severity || 'high').toUpperCase()}] ${inc.title}`, {
+                      body: `${inc.affectedService || inc.service || 'APEX'}: ${inc.description || inc.summary || 'New incident reported'}`,
+                      severity: inc.severity || 'high',
+                      tag: inc.id,
+                    });
+                  }
+                });
+              } else {
+                data.data.forEach((inc: any) => knownIncidentIdsRef.current.add(inc.id));
+              }
+              return data.data;
+            });
+            if (data.data.length > 0) {
+              setSelectedIncident((curr) => curr || data.data[0]);
+            }
           }
-        }
-      })
-      .catch((err) => console.warn('Could not fetch initial incidents:', err));
+        })
+        .catch((err) => console.warn('Could not sync incidents:', err));
+    };
+
+    fetchIncidents();
+    const interval = setInterval(fetchIncidents, 6000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, []);
 
   const handleRequestAnalysis = (incidentId: string) => {
@@ -266,6 +351,31 @@ export default function App() {
               />
               <span className="capitalize text-slate-300 hidden sm:inline">{wsStatus}</span>
             </div>
+
+            {/* Real Mobile & Desktop Alert Button */}
+            <button
+              onClick={notifPermission === 'granted' ? handleTestNotification : handleEnableNotifications}
+              disabled={isTestingNotif}
+              title={
+                notifPermission === 'granted'
+                  ? 'Tap to trigger a real test phone notification with sound & vibration'
+                  : 'Enable Mobile Notifications'
+              }
+              className={`flex items-center space-x-1.5 rounded px-2.5 py-1 text-[11px] font-semibold transition border ${
+                notifPermission === 'granted'
+                  ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/60 active:scale-95'
+                  : 'border-amber-500/60 bg-amber-950/40 text-amber-300 hover:bg-amber-900/60 animate-pulse active:scale-95'
+              }`}
+            >
+              <span>{notifPermission === 'granted' ? '⚡' : '🔔'}</span>
+              <span className="inline">
+                {isTestingNotif
+                  ? 'Alerting...'
+                  : notifPermission === 'granted'
+                  ? 'Test Phone Alert'
+                  : 'Enable Mobile Alerts'}
+              </span>
+            </button>
 
             {/* Supabase Google Auth */}
             <SupabaseAuthBar
