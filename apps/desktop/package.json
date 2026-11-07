@@ -7,6 +7,7 @@
     "dev:renderer": "vite",
     "build:renderer": "vite build",
     "build:electron": "tsc -p electron/tsconfig.json",
+    "build:vercel": "node scripts/build-vercel.js",
     "build": "pnpm run build:renderer && pnpm run build:electron",
     "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit",
     "start": "electron .",
