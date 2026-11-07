@@ -1,9 +1,11 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Incident, WsServerMessage, WsClientMessage, SystemInfo } from '@apex/shared';
+import { Incident, WsServerMessage, WsClientMessage, SystemInfo, User, SupabaseClient } from '@apex/shared';
 import LogInvestigationPanel from './LogInvestigationPanel';
+import SupabaseAuthBar from './SupabaseAuthBar';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3001/ws';
-const API_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+const currentHost = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
+const WS_URL = import.meta.env.VITE_WS_URL || `ws://${currentHost}:3001/ws`;
+const API_URL = import.meta.env.VITE_SERVER_URL || `http://${currentHost}:3001`;
 
 export default function App() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -13,6 +15,16 @@ export default function App() {
   const [aiAnalysisMap, setAiAnalysisMap] = useState<Record<string, { analysis: string; rootCause: string; mitigations: string[] }>>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [viewMode, setViewMode] = useState<'inspector' | 'logs'>('inspector');
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [supabaseClient, setSupabaseClient] = useState<SupabaseClient | null>(null);
+
+  const handleVercelTokenSynced = useCallback((token: string, teamId?: string) => {
+    fetch(`${API_URL}/api/vercel/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, teamId }),
+    }).catch((err) => console.warn('[Supabase Sync] Could not sync Vercel token with server:', err));
+  }, []);
 
   const socketRef = useRef<WebSocket | null>(null);
 
@@ -222,6 +234,15 @@ export default function App() {
             />
             <span className="capitalize text-slate-300">{wsStatus}</span>
           </div>
+
+          {/* Supabase Google Auth */}
+          <SupabaseAuthBar
+            onUserChange={(u, client) => {
+              setAuthUser(u);
+              setSupabaseClient(client);
+            }}
+            onVercelTokenSynced={handleVercelTokenSynced}
+          />
         </div>
       </header>
 
@@ -299,7 +320,11 @@ export default function App() {
         {/* Right: Log Investigation OR Selected Incident Inspector */}
         {viewMode === 'logs' ? (
           <section className="flex flex-1 flex-col overflow-hidden bg-slate-950">
-            <LogInvestigationPanel onSelectIncident={handleSelectIncidentFromLog} />
+            <LogInvestigationPanel
+              onSelectIncident={handleSelectIncidentFromLog}
+              currentUser={authUser}
+              supabaseClient={supabaseClient}
+            />
           </section>
         ) : (
           <section className="flex flex-1 flex-col overflow-y-auto bg-slate-950 p-6">

@@ -1,8 +1,18 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Incident, WsServerMessage, WsClientMessage } from '@apex/shared';
+import {
+  Incident,
+  WsServerMessage,
+  WsClientMessage,
+  User,
+  SupabaseClient,
+  fetchUserIncidentsFromSupabase,
+  syncIncidentToSupabase,
+} from '@apex/shared';
+import MobileSupabaseAuthBar from './SupabaseAuthBar';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3001/ws';
-const API_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+const currentHost = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
+const WS_URL = import.meta.env.VITE_WS_URL || `ws://${currentHost}:3001/ws`;
+const API_URL = import.meta.env.VITE_SERVER_URL || `http://${currentHost}:3001`;
 
 export default function App() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -11,6 +21,16 @@ export default function App() {
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [aiAnalysisMap, setAiAnalysisMap] = useState<Record<string, { analysis: string; rootCause: string; mitigations: string[] }>>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [supabaseClient, setSupabaseClient] = useState<SupabaseClient | null>(null);
+
+  const handleVercelTokenSynced = useCallback((token: string, teamId?: string) => {
+    fetch(`${API_URL}/api/vercel/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, teamId }),
+    }).catch((err) => console.warn('[Mobile Sync] Could not sync Vercel token with server:', err));
+  }, []);
 
   const socketRef = useRef<WebSocket | null>(null);
 
@@ -96,6 +116,10 @@ export default function App() {
       };
       socketRef.current.send(JSON.stringify(msg));
     }
+    const target = incidents.find(i => i.id === incidentId);
+    if (target && supabaseClient && authUser) {
+      syncIncidentToSupabase(supabaseClient, authUser.id, { ...target, status: 'investigating' });
+    }
   };
 
   const handleRequestAnalysis = (incidentId: string) => {
@@ -119,6 +143,13 @@ export default function App() {
                 mitigations: res.data.recommendedMitigations
               }
             }));
+            const updated = incidents.find(i => i.id === incidentId);
+            if (updated && supabaseClient && authUser) {
+              syncIncidentToSupabase(supabaseClient, authUser.id, {
+                ...updated,
+                rootCauseAnalysis: res.data.suggestedRootCause,
+              });
+            }
           }
         })
         .finally(() => setIsAnalyzing(false));
@@ -149,6 +180,26 @@ export default function App() {
           <span className="capitalize text-slate-400">{wsStatus}</span>
         </div>
       </header>
+
+      {/* Supabase Google Auth Sync Bar */}
+      <MobileSupabaseAuthBar
+        onUserChange={(u, client) => {
+          setAuthUser(u);
+          setSupabaseClient(client);
+          if (u && client) {
+            fetchUserIncidentsFromSupabase(client, u.id).then((synced) => {
+              if (synced && synced.length > 0) {
+                setIncidents((prev) => {
+                  const map = new Map(prev.map(i => [i.id, i]));
+                  synced.forEach(s => map.set(s.id, s));
+                  return Array.from(map.values());
+                });
+              }
+            });
+          }
+        }}
+        onVercelTokenSynced={handleVercelTokenSynced}
+      />
 
       {/* Navigation Tabs */}
       <div className="flex border-b border-slate-800 bg-slate-900/40 px-3 pt-2">

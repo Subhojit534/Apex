@@ -18,11 +18,14 @@ export class ApexWebSocketManager {
   private setupListeners() {
     this.wss.on('connection', (ws: WebSocket) => {
       this.clients.add(ws);
+      const clientId = 'client-' + Math.random().toString(36).substring(2, 9);
+      const time = new Date().toLocaleTimeString();
+      console.log(`[${time}] [WS] Client connected: ${clientId} (Active clients: ${this.clients.size})`);
 
       // Send connection acknowledgement
       const ackMsg: WsServerMessage = {
         type: 'connection_ack',
-        clientId: 'client-' + Math.random().toString(36).substring(2, 9),
+        clientId,
         serverVersion: '0.1.0-phase0',
         connectedClients: this.clients.size
       };
@@ -36,11 +39,12 @@ export class ApexWebSocketManager {
           const raw = JSON.parse(data.toString());
           const parseResult = WsClientMessageSchema.safeParse(raw);
           if (!parseResult.success) {
-            console.warn('[WS] Invalid client message:', parseResult.error.format());
+            console.warn(`[${new Date().toLocaleTimeString()}] [WS] Invalid client message from ${clientId}:`, parseResult.error.format());
             return;
           }
 
           const msg = parseResult.data;
+          console.log(`[${new Date().toLocaleTimeString()}] [WS] Received '${msg.type}' from ${clientId}`);
 
           switch (msg.type) {
             case 'ping':
@@ -109,6 +113,7 @@ export class ApexWebSocketManager {
 
       ws.on('close', () => {
         this.clients.delete(ws);
+        console.log(`[${new Date().toLocaleTimeString()}] [WS] Client disconnected: ${clientId} (Remaining: ${this.clients.size})`);
       });
 
       ws.on('error', (err) => {

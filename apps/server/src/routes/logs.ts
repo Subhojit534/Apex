@@ -59,6 +59,36 @@ const EXTENDED_SIGNATURES = [
     severity: 'critical' as const,
     title: 'Database Unavailable',
   },
+  {
+    pattern: /Task timed out after|FUNCTION_INVOCATION_TIMEOUT|Execution timed out/i,
+    category: 'performance' as const,
+    severity: 'critical' as const,
+    title: 'Serverless Function Execution Timeout',
+  },
+  {
+    pattern: /FUNCTION_PAYLOAD_LIMIT_EXCEEDED|memory limit exceeded/i,
+    category: 'resource_exhaustion' as const,
+    severity: 'high' as const,
+    title: 'Serverless Memory/Payload Limit Exceeded',
+  },
+  {
+    pattern: /MIDDLEWARE_INVOCATION_FAILED|Edge Function invocation failed/i,
+    category: 'system_crash' as const,
+    severity: 'critical' as const,
+    title: 'Edge Middleware Invocation Failure',
+  },
+  {
+    pattern: /PrismaClientInitializationError|PrismaClientKnownRequestError|Can't reach database server/i,
+    category: 'availability' as const,
+    severity: 'critical' as const,
+    title: 'Prisma Database Connection Failure',
+  },
+  {
+    pattern: /500 Internal Server Error|Unhandled rejection|Internal Server Error/i,
+    category: 'system_crash' as const,
+    severity: 'high' as const,
+    title: 'Serverless 500 Internal Error',
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -187,6 +217,13 @@ function buildRemediationSteps(rootService: string | null, cascade: CascadeNode[
       '[READ-ONLY DIAGNOSIS] Check upstream dependency health endpoints',
       '[CONFIGURATION] Adjust HTTP client timeout and retry settings',
       '[RECOVERY] Rolling restart of affected service pods if memory or connection leak is confirmed',
+    );
+  } else if (rootService?.match(/vercel|next|web|frontend|app/i)) {
+    steps.push(
+      '[READ-ONLY DIAGNOSIS] Inspect Vercel runtime function logs and memory ceiling metrics',
+      '[CONFIGURATION] Check function maxDuration in vercel.json or route handler configuration',
+      '[CONFIGURATION] Verify connection pooling (e.g. Prisma Accelerate or PgBouncer) for serverless cold-starts',
+      '[RECOVERY] Trigger instant rollback or redeploy of previous healthy Vercel deployment',
     );
   }
 
@@ -355,6 +392,8 @@ export function createLogsRouter(wsManager: ApexWebSocketManager): Router {
       remediationSteps,
       isSimulated,
     };
+
+    console.log(`[${new Date().toLocaleTimeString()}] [Log Engine] Ingested ${entries.length} lines for '${defaultService}' -> Generated ${createdIncidents.length} incidents (Root: '${rootService || 'none'}', Severity: ${severity})`);
 
     res.status(201).json({ success: true, data: report });
   });

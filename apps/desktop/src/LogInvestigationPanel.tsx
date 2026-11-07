@@ -1,19 +1,24 @@
 /**
  * LogInvestigationPanel
  *
- * Provides textarea paste, TXT/JSON/CSV file upload, and "Load Sample Logs" for the
- * database-to-payment outage cascade scenario.
- *
- * On submit, calls POST /api/logs/ingest and renders the returned InvestigationReport.
- * Incidents are auto-broadcast back to the dashboard via WebSocket.
+ * Provides:
+ * 1. Manual log paste (TXT, JSON, CSV) and sample demo loader
+ * 2. Live Vercel Projects & Real-Time Logs Integration:
+ *    - Authenticates via Vercel Personal Access Token
+ *    - Lists all user/team Vercel projects with status & framework
+ *    - Fetches real runtime and deployment event logs for the selected project
+ *    - Ingests live Vercel logs into the APEX Agent analysis & correlation engine
+ * 3. Investigation Report viewer with root-cause cascade, timeline, and remediation plan
  */
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { User, SupabaseClient, saveUserIntegration, syncIncidentToSupabase } from '@apex/shared';
 import { SAMPLE_TXT_LOGS, SAMPLE_JSON_LOGS, SAMPLE_CSV_LOGS } from './sampleLogs';
 
-const API_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+const currentHost = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
+const API_URL = import.meta.env.VITE_SERVER_URL || `http://${currentHost}:3001`;
 
 // ---------------------------------------------------------------------------
-// Types (mirrors InvestigationReport from server/routes/logs.ts)
+// Types
 // ---------------------------------------------------------------------------
 
 interface EvidenceEntry {
@@ -47,8 +52,33 @@ interface InvestigationReport {
   isSimulated: boolean;
 }
 
+export interface VercelProjectItem {
+  id: string;
+  name: string;
+  framework: string | null;
+  updatedAt: number;
+  productionUrl?: string;
+  latestDeployments?: Array<{
+    id: string;
+    url: string;
+    readyState: string;
+    createdAt: number;
+    meta?: Record<string, string>;
+  }>;
+}
+
+export interface VercelUser {
+  id: string;
+  username: string;
+  email: string;
+  name?: string;
+  avatar?: string;
+}
+
 export interface LogInvestigationPanelProps {
   onSelectIncident?: (incidentId: string) => void;
+  currentUser?: User | null;
+  supabaseClient?: SupabaseClient | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -73,10 +103,6 @@ const LEVEL_COLORS: Record<string, string> = {
 function formatTs(iso: string): string {
   try { return new Date(iso).toLocaleTimeString(); } catch { return iso; }
 }
-
-// ---------------------------------------------------------------------------
-// Export helpers (runs in-browser — no server round-trip)
-// ---------------------------------------------------------------------------
 
 function reportToMarkdown(r: InvestigationReport): string {
   const lines: string[] = [
@@ -116,19 +142,309 @@ function downloadFile(content: string, filename: string, mime: string) {
 // ---------------------------------------------------------------------------
 
 type TabKey = 'input' | 'report';
+type InputMode = 'vercel' | 'manual';
 type SampleFormat = 'txt' | 'json' | 'csv';
 
-export default function LogInvestigationPanel({ onSelectIncident }: LogInvestigationPanelProps = {}) {
-  const [activeTab, setActiveTab]       = useState<TabKey>('input');
-  const [logContent, setLogContent]     = useState('');
-  const [format, setFormat]             = useState<'auto' | 'txt' | 'json' | 'csv'>('auto');
-  const [isLoading, setIsLoading]       = useState(false);
-  const [error, setError]               = useState<string | null>(null);
-  const [report, setReport]             = useState<InvestigationReport | null>(null);
+export default function LogInvestigationPanel({
+  onSelectIncident,
+  currentUser,
+  supabaseClient,
+}: LogInvestigationPanelProps = {}) {
+  const [activeTab, setActiveTab] = useState<TabKey>('input');
+  const [inputMode, setInputMode] = useState<InputMode>('vercel');
+
+  // Manual input state
+  const [logContent, setLogContent] = useState('');
+  const [format, setFormat] = useState<'auto' | 'txt' | 'json' | 'csv'>('auto');
   const [sampleFormat, setSampleFormat] = useState<SampleFormat>('txt');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load sample logs
+  // Vercel integration state
+  const [vercelConnected, setVercelConnected] = useState<boolean>(false);
+  const [vercelUser, setVercelUser] = useState<VercelUser | null>(null);
+  const [vercelTokenInput, setVercelTokenInput] = useState<string>('');
+  const [vercelTeamIdInput, setVercelTeamIdInput] = useState<string>('');
+  const [showToken, setShowToken] = useState<boolean>(false);
+  const [isCheckingVercel, setIsCheckingVercel] = useState<boolean>(true);
+  const [isConnectingVercel, setIsConnectingVercel] = useState<boolean>(false);
+  const [vercelError, setVercelError] = useState<string | null>(null);
+
+  const [projects, setProjects] = useState<VercelProjectItem[]>([]);
+  const [isLoadingProjects, setIsLoadingProjects] = useState<boolean>(false);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [projectSearch, setProjectSearch] = useState<string>('');
+
+  const [vercelLogs, setVercelLogs] = useState<string>('');
+  const [isLoadingLogs, setIsLoadingLogs] = useState<boolean>(false);
+  const [logStats, setLogStats] = useState<{ total: number; errors: number; warns: number } | null>(null);
+  const [_deploymentInfo, setDeploymentInfo] = useState<{ url?: string; readyState?: string; commitMessage?: string } | null>(null);
+  const [logFilter, setLogFilter] = useState<'all' | 'error' | 'warn'>('all');
+  const [logFilterQuery, setLogFilterQuery] = useState<string>('');
+
+  // General processing state
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [report, setReport] = useState<InvestigationReport | null>(null);
+
+  // Selected project object
+  const selectedProject = useMemo(() => {
+    return projects.find(p => p.id === selectedProjectId) || null;
+  }, [projects, selectedProjectId]);
+
+  // Check Vercel connection status on mount
+  const checkVercelStatus = useCallback(async () => {
+    setIsCheckingVercel(true);
+    setVercelError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/vercel/status`);
+      const data = await res.json();
+      if (data.configured && data.valid && data.user) {
+        setVercelConnected(true);
+        setVercelUser(data.user);
+        fetchProjects();
+      } else {
+        setVercelConnected(false);
+        setVercelUser(null);
+      }
+    } catch {
+      setVercelConnected(false);
+    } finally {
+      setIsCheckingVercel(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkVercelStatus();
+  }, [checkVercelStatus]);
+
+  // Fetch Vercel projects
+  const fetchProjects = async () => {
+    setIsLoadingProjects(true);
+    setVercelError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/vercel/projects`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.projects)) {
+        setProjects(data.projects);
+        if (data.projects.length > 0 && !selectedProjectId) {
+          setSelectedProjectId(data.projects[0].id);
+        }
+      } else {
+        setVercelError(data.error || 'Failed to list Vercel projects.');
+      }
+    } catch (err: unknown) {
+      setVercelError(`Error listing projects: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsLoadingProjects(false);
+    }
+  };
+
+  // Connect Vercel Token
+  const handleConnectVercel = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!vercelTokenInput.trim()) {
+      setVercelError('Please enter your Vercel Personal Access Token.');
+      return;
+    }
+    setIsConnectingVercel(true);
+    setVercelError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/vercel/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: vercelTokenInput.trim(),
+          teamId: vercelTeamIdInput.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.user) {
+        setVercelConnected(true);
+        setVercelUser(data.user);
+
+        // Sync to Supabase user_integrations if logged in
+        if (currentUser && supabaseClient) {
+          saveUserIntegration(
+            supabaseClient,
+            currentUser.id,
+            'vercel',
+            vercelTokenInput.trim(),
+            vercelTeamIdInput.trim() || null,
+            { username: data.user.username, email: data.user.email, name: data.user.name }
+          ).catch((e) => console.warn('[Supabase Sync] Could not persist integration:', e));
+        }
+
+        setVercelTokenInput('');
+        fetchProjects();
+      } else {
+        setVercelError(data.error || 'Failed to authenticate with Vercel.');
+      }
+    } catch (err: unknown) {
+      setVercelError(`Connection failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsConnectingVercel(false);
+    }
+  };
+
+  // Disconnect Vercel
+  const handleDisconnectVercel = async () => {
+    try {
+      await fetch(`${API_URL}/api/vercel/token`, { method: 'DELETE' });
+    } catch {
+      // Ignore
+    }
+    setVercelConnected(false);
+    setVercelUser(null);
+    setProjects([]);
+    setSelectedProjectId('');
+    setVercelLogs('');
+    setLogStats(null);
+  };
+
+  // Fetch logs for selected project
+  const fetchProjectLogs = useCallback(async (projectIdToFetch: string) => {
+    if (!projectIdToFetch) return;
+    setIsLoadingLogs(true);
+    setVercelError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/vercel/projects/${encodeURIComponent(projectIdToFetch)}/logs?limit=150`);
+      const data = await res.json();
+      if (data.success) {
+        setVercelLogs(data.rawLogs || '');
+        setLogStats({
+          total: data.linesCount || 0,
+          errors: data.errorCount || 0,
+          warns: data.warnCount || 0,
+        });
+        setDeploymentInfo(data.deployment || null);
+      } else {
+        setVercelError(data.error || 'Failed to fetch logs for this project.');
+      }
+    } catch (err: unknown) {
+      setVercelError(`Error fetching logs: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  }, []);
+
+  // When selected project changes, fetch its logs
+  useEffect(() => {
+    if (selectedProjectId && vercelConnected) {
+      fetchProjectLogs(selectedProjectId);
+    }
+  }, [selectedProjectId, vercelConnected, fetchProjectLogs]);
+
+  // Load simulated outage for current project
+  const handleLoadSimulatedOutage = async () => {
+    if (!selectedProjectId) return;
+    setIsLoadingLogs(true);
+    setVercelError(null);
+    try {
+      const projectName = selectedProject?.name || selectedProjectId;
+      const res = await fetch(
+        `${API_URL}/api/vercel/projects/${encodeURIComponent(selectedProjectId)}/sample-logs?projectName=${encodeURIComponent(projectName)}`
+      );
+      const data = await res.json();
+      if (data.success) {
+        setVercelLogs(data.rawLogs || '');
+        const lines = (data.rawLogs || '').split('\n').filter(Boolean);
+        const errors = lines.filter((l: string) => l.includes('[ERROR]')).length;
+        const warns = lines.filter((l: string) => l.includes('[WARN]')).length;
+        setLogStats({
+          total: lines.length,
+          errors,
+          warns,
+        });
+        setDeploymentInfo({
+          url: selectedProject?.productionUrl || `https://${projectName}.vercel.app`,
+          readyState: 'ERROR',
+          commitMessage: 'fix(checkout): add connection timeout and circuit breaker fallback',
+        });
+      }
+    } catch (err: unknown) {
+      setVercelError(`Failed to generate simulated outage: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  };
+
+  // Submit logs to APEX engine
+  const handleIngestLogs = useCallback(async (contentToIngest: string, serviceName?: string, isSimulated = false) => {
+    if (!contentToIngest.trim()) {
+      setError('No log content available to investigate. Select a project with active logs or load a test scenario.');
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`${API_URL}/api/logs/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: contentToIngest,
+          format: 'auto',
+          service: serviceName || 'vercel-project',
+          isSimulated: isSimulated || contentToIngest.includes('SIMULATED') || contentToIngest.includes('Cold-start initiated'),
+        }),
+      });
+
+      const json = await res.json();
+      if (!json.success) {
+        setError(json.error ?? 'Server error during log correlation.');
+        return;
+      }
+      const reportData = json.data as InvestigationReport;
+      setReport(reportData);
+      setActiveTab('report');
+
+      // Sync created incidents to Supabase user_incidents
+      if (currentUser && supabaseClient && Array.isArray(reportData.incidentsCreated)) {
+        reportData.incidentsCreated.forEach((inc) => {
+          syncIncidentToSupabase(supabaseClient, currentUser.id, {
+            ...inc,
+            severity: (inc.severity as any) || 'medium',
+            description: inc.title,
+            status: 'detected',
+            category: 'availability',
+            metadata: {},
+            recommendedActions: [],
+            detectedAt: reportData.generatedAt,
+            updatedAt: reportData.generatedAt,
+          });
+        });
+      }
+    } catch (err: unknown) {
+      setError(`Server unreachable: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Filtered projects list
+  const filteredProjects = useMemo(() => {
+    if (!projectSearch.trim()) return projects;
+    const q = projectSearch.toLowerCase();
+    return projects.filter(p => p.name.toLowerCase().includes(q) || (p.framework && p.framework.toLowerCase().includes(q)));
+  }, [projects, projectSearch]);
+
+  // Filtered log lines in terminal
+  const filteredLogLines = useMemo(() => {
+    if (!vercelLogs) return [];
+    let lines = vercelLogs.split('\n').filter(Boolean);
+    if (logFilter === 'error') {
+      lines = lines.filter(l => l.includes('[ERROR]') || l.includes('FATAL'));
+    } else if (logFilter === 'warn') {
+      lines = lines.filter(l => l.includes('[WARN]') || l.includes('[ERROR]'));
+    }
+    if (logFilterQuery.trim()) {
+      const q = logFilterQuery.toLowerCase();
+      lines = lines.filter(l => l.toLowerCase().includes(q));
+    }
+    return lines;
+  }, [vercelLogs, logFilter, logFilterQuery]);
+
+  // Load sample manual logs
   const loadSample = useCallback(() => {
     const samples: Record<SampleFormat, string> = {
       txt:  SAMPLE_TXT_LOGS,
@@ -151,195 +467,548 @@ export default function LogInvestigationPanel({ onSelectIncident }: LogInvestiga
 
     const reader = new FileReader();
     reader.onload = (ev) => {
-      setLogContent(ev.target?.result as string || '');
+      setLogContent((ev.target?.result as string) || '');
       setError(null);
     };
     reader.readAsText(file);
-    // reset input so same file can be re-selected
     e.target.value = '';
   }, []);
 
-  // Submit to backend
-  const handleIngest = useCallback(async () => {
-    if (!logContent.trim()) {
-      setError('Please paste log content or load a sample before submitting.');
-      return;
-    }
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const res = await fetch(`${API_URL}/api/logs/ingest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: logContent,
-          format,
-          isSimulated: logContent.includes('SIMULATED') || logContent === SAMPLE_TXT_LOGS || logContent === SAMPLE_JSON_LOGS || logContent === SAMPLE_CSV_LOGS,
-        }),
-      });
-
-      const json = await res.json();
-      if (!json.success) {
-        setError(json.error ?? 'Server returned an error. Check that the backend is running.');
-        return;
-      }
-      setReport(json.data as InvestigationReport);
-      setActiveTab('report');
-    } catch (err) {
-      setError(`Could not reach the server: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [logContent, format]);
-
-  const handleClear = useCallback(() => {
-    setLogContent('');
-    setReport(null);
-    setError(null);
-    setActiveTab('input');
-  }, []);
-
-  // -------------------------------------------------------------------------
-  // Render
-  // -------------------------------------------------------------------------
-
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-slate-950 text-slate-100">
 
-      {/* Section Header */}
-      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-        <div className="flex items-center space-x-2">
-          <div className="h-2 w-2 rounded-full bg-violet-400" />
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Log Investigation
+      {/* Header bar */}
+      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3 bg-slate-900/40">
+        <div className="flex items-center space-x-2.5">
+          <div className="h-2.5 w-2.5 rounded-full bg-violet-400 animate-pulse" />
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+            Log Investigation & Agent Analysis
           </h2>
         </div>
         {report && (
-          <span className="rounded bg-violet-900/40 border border-violet-700/50 px-2 py-0.5 text-[10px] font-medium text-violet-300">
-            Report Ready
+          <span className="rounded bg-violet-900/50 border border-violet-700/60 px-2 py-0.5 text-[10px] font-medium text-violet-300">
+            Investigation Report Ready
           </span>
         )}
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b border-slate-800 bg-slate-900/30">
-        {(['input', 'report'] as TabKey[]).map(tab => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-4 py-2 text-xs font-medium border-b-2 transition capitalize ${
-              activeTab === tab
-                ? 'border-violet-500 text-violet-300'
-                : 'border-transparent text-slate-400 hover:text-slate-300'
-            } ${tab === 'report' && !report ? 'opacity-40 cursor-not-allowed' : ''}`}
-            disabled={tab === 'report' && !report}
-          >
-            {tab === 'report' ? 'Investigation Report' : 'Log Input'}
-          </button>
-        ))}
+      {/* Main Tab Navigation: Input vs Report */}
+      <div className="flex border-b border-slate-800 bg-slate-900/60 px-4 pt-1">
+        <button
+          onClick={() => setActiveTab('input')}
+          className={`px-4 py-2 text-xs font-medium border-b-2 transition ${
+            activeTab === 'input'
+              ? 'border-violet-500 text-violet-300 font-semibold'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          1. Select & Ingest Logs
+        </button>
+        <button
+          onClick={() => setActiveTab('report')}
+          disabled={!report}
+          className={`px-4 py-2 text-xs font-medium border-b-2 transition ${
+            activeTab === 'report'
+              ? 'border-violet-500 text-violet-300 font-semibold'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          } ${!report ? 'opacity-40 cursor-not-allowed' : ''}`}
+        >
+          2. Root-Cause Report {report ? `(${report.severity.toUpperCase()})` : ''}
+        </button>
       </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* INPUT TAB                                                            */}
+      {/* TAB 1: INPUT                                                       */}
       {/* ------------------------------------------------------------------ */}
       {activeTab === 'input' && (
-        <div className="flex flex-col flex-1 overflow-hidden p-4 space-y-4">
+        <div className="flex flex-col flex-1 overflow-y-auto p-4 space-y-4">
 
-          {/* Sample + Format row */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-slate-400">Sample scenario:</span>
-            <div className="flex rounded-md border border-slate-700 overflow-hidden text-xs">
-              {(['txt', 'json', 'csv'] as SampleFormat[]).map(f => (
-                <button
-                  key={f}
-                  onClick={() => setSampleFormat(f)}
-                  className={`px-2.5 py-1 uppercase font-mono transition ${
-                    sampleFormat === f ? 'bg-violet-700 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                  }`}
-                >
-                  {f}
-                </button>
-              ))}
-            </div>
+          {/* Mode Switcher: Vercel vs Manual */}
+          <div className="flex rounded-lg border border-slate-800 bg-slate-900/90 p-1">
             <button
-              onClick={loadSample}
-              className="rounded bg-violet-700 hover:bg-violet-600 px-3 py-1 text-xs font-medium text-white transition"
+              onClick={() => setInputMode('vercel')}
+              className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium rounded-md transition ${
+                inputMode === 'vercel'
+                  ? 'bg-violet-700 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+              }`}
             >
-              Load Sample Logs
+              <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 116 100">
+                <path d="M57.5 0L115 100H0L57.5 0z" />
+              </svg>
+              <span>Vercel Projects & Live Logs</span>
+              {vercelConnected && (
+                <span className="flex items-center gap-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.2 text-[9px]">
+                  ● Connected
+                </span>
+              )}
             </button>
-            <span className="text-[10px] text-amber-400 italic">⚠ Simulated data</span>
-          </div>
 
-          {/* File Upload */}
-          <div className="flex items-center gap-3">
             <button
-              onClick={() => fileInputRef.current?.click()}
-              className="rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3 py-1 text-xs text-slate-300 transition"
+              onClick={() => setInputMode('manual')}
+              className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium rounded-md transition ${
+                inputMode === 'manual'
+                  ? 'bg-slate-800 text-slate-100 shadow-md'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+              }`}
             >
-              Upload .txt / .json / .csv
+              <span>📄</span>
+              <span>Manual Paste / File Upload</span>
             </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".txt,.log,.json,.csv"
-              className="hidden"
-              onChange={handleFileUpload}
-            />
-            <div className="flex items-center gap-1.5 text-xs text-slate-400">
-              <span>Format:</span>
-              <select
-                value={format}
-                onChange={e => setFormat(e.target.value as typeof format)}
-                className="rounded bg-slate-800 border border-slate-700 px-2 py-0.5 text-slate-300 text-xs"
-              >
-                <option value="auto">Auto-detect</option>
-                <option value="txt">TXT / Plain</option>
-                <option value="json">JSON / NDJSON</option>
-                <option value="csv">CSV</option>
-              </select>
-            </div>
           </div>
 
-          {/* Textarea */}
-          <textarea
-            className="flex-1 min-h-[180px] rounded-lg border border-slate-700 bg-slate-900/80 p-3 text-xs font-mono text-slate-300 placeholder-slate-600 resize-none focus:outline-none focus:border-violet-500 transition"
-            placeholder={`Paste system logs here (TXT, JSON, or CSV)…\n\nExample:\n2026-11-07T04:00:03Z [ERROR] [postgres-primary] FATAL: connection pool exhausted\n2026-11-07T04:00:12Z [ERROR] [backend-api] connect ECONNREFUSED 127.0.0.1:5432`}
-            value={logContent}
-            onChange={e => setLogContent(e.target.value)}
-            spellCheck={false}
-          />
+          {/* ---------------------------------------------------------------- */}
+          {/* SUB-VIEW A: VERCEL PROJECTS & LOGS                                */}
+          {/* ---------------------------------------------------------------- */}
+          {inputMode === 'vercel' && (
+            <div className="space-y-4">
 
-          {/* Char count */}
-          <div className="flex items-center justify-between text-[10px] text-slate-500">
-            <span>{logContent.length.toLocaleString()} characters · {logContent.split('\n').filter(Boolean).length} lines</span>
-            {logContent && (
-              <button onClick={handleClear} className="text-slate-500 hover:text-slate-300 transition">
-                Clear
-              </button>
-            )}
-          </div>
+              {/* State A.1: Checking status */}
+              {isCheckingVercel && (
+                <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-6 text-center text-xs text-slate-400">
+                  <div className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-violet-500 border-t-transparent mb-2" />
+                  <p>Connecting to Vercel service...</p>
+                </div>
+              )}
 
-          {/* Error */}
-          {error && (
-            <div className="rounded-lg border border-rose-800/60 bg-rose-950/30 p-3 text-xs text-rose-300">
-              ⚠ {error}
+              {/* State A.2: Not connected -> Token Input Card */}
+              {!isCheckingVercel && !vercelConnected && (
+                <div className="rounded-xl border border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950 p-5 space-y-4">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 fill-current text-white" viewBox="0 0 116 100">
+                          <path d="M57.5 0L115 100H0L57.5 0z" />
+                        </svg>
+                        <h3 className="text-sm font-semibold text-slate-100">Connect Your Vercel Account</h3>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-400 leading-relaxed">
+                        Authorize APEX to list your Vercel projects and stream real runtime, serverless function, and deployment event logs for autonomous AI root-cause analysis.
+                      </p>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleConnectVercel} className="space-y-3 pt-1">
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="text-xs font-medium text-slate-300">Vercel Personal Access Token</label>
+                        <a
+                          href="https://vercel.com/account/tokens"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[11px] text-violet-400 hover:text-violet-300 underline"
+                        >
+                          Generate token at vercel.com/account/tokens ↗
+                        </a>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={showToken ? 'text' : 'password'}
+                          placeholder="Paste your Vercel token (e.g. vca_... or legacy token)"
+                          value={vercelTokenInput}
+                          onChange={e => setVercelTokenInput(e.target.value)}
+                          className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 pr-10 text-xs text-slate-200 placeholder-slate-600 font-mono focus:border-violet-500 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowToken(!showToken)}
+                          className="absolute right-2.5 top-2.5 text-xs text-slate-500 hover:text-slate-300"
+                        >
+                          {showToken ? 'Hide' : 'Show'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-slate-400">Team ID / Slug (Optional)</label>
+                      <input
+                        type="text"
+                        placeholder="Leave blank for personal account, or enter team_... / team slug"
+                        value={vercelTeamIdInput}
+                        onChange={e => setVercelTeamIdInput(e.target.value)}
+                        className="w-full mt-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:border-violet-500 focus:outline-none"
+                      />
+                    </div>
+
+                    {vercelError && (
+                      <div className="rounded-lg border border-rose-800/60 bg-rose-950/40 p-2.5 text-xs text-rose-300">
+                        ⚠ {vercelError}
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={isConnectingVercel || !vercelTokenInput.trim()}
+                      className="w-full rounded-lg bg-violet-700 hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed py-2 text-xs font-semibold text-white transition shadow-md shadow-violet-700/20"
+                    >
+                      {isConnectingVercel ? 'Verifying with Vercel…' : 'Connect & Fetch Vercel Projects'}
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {/* State A.3: Connected -> Project Selector & Real Logs */}
+              {!isCheckingVercel && vercelConnected && (
+                <div className="space-y-4">
+
+                  {/* Connected Account Bar */}
+                  <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-7 w-7 rounded-full bg-violet-800/80 border border-violet-500 flex items-center justify-center text-xs font-bold text-white">
+                        {vercelUser?.username?.charAt(0).toUpperCase() || 'V'}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-semibold text-slate-200">
+                            {vercelUser?.name || vercelUser?.username}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            (@{vercelUser?.username})
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-500">{projects.length} Vercel projects loaded</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={fetchProjects}
+                        disabled={isLoadingProjects}
+                        className="rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 px-2 py-1 text-[11px] text-slate-300 transition"
+                      >
+                        {isLoadingProjects ? 'Refreshing…' : '↻ Refresh Projects'}
+                      </button>
+                      <button
+                        onClick={handleDisconnectVercel}
+                        className="rounded border border-slate-700/70 bg-transparent hover:bg-rose-950/40 hover:border-rose-700/60 px-2 py-1 text-[11px] text-slate-400 hover:text-rose-300 transition"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Project Selector Section */}
+                  <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                        Select Vercel Project
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Filter projects..."
+                        value={projectSearch}
+                        onChange={e => setProjectSearch(e.target.value)}
+                        className="w-48 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-violet-500"
+                      />
+                    </div>
+
+                    {isLoadingProjects ? (
+                      <div className="p-4 text-center text-xs text-slate-400">Loading projects from Vercel...</div>
+                    ) : filteredProjects.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-lg">
+                        No projects match your search filter.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                        {filteredProjects.map(p => {
+                          const isSelected = p.id === selectedProjectId;
+                          const latest = p.latestDeployments?.[0];
+                          const stateColor =
+                            latest?.readyState === 'READY'
+                              ? 'text-emerald-400 border-emerald-800/40 bg-emerald-950/30'
+                              : latest?.readyState === 'ERROR'
+                              ? 'text-rose-400 border-rose-800/40 bg-rose-950/30'
+                              : 'text-amber-400 border-amber-800/40 bg-amber-950/30';
+
+                          return (
+                            <div
+                              key={p.id}
+                              onClick={() => setSelectedProjectId(p.id)}
+                              className={`cursor-pointer rounded-lg border p-3 transition flex flex-col justify-between ${
+                                isSelected
+                                  ? 'border-violet-500 bg-violet-950/30 shadow-sm'
+                                  : 'border-slate-800 bg-slate-900/60 hover:border-slate-700 hover:bg-slate-850'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between">
+                                <span className="text-xs font-semibold text-slate-200 truncate">
+                                  {p.name}
+                                </span>
+                                {p.framework && (
+                                  <span className="rounded bg-slate-800 border border-slate-700 px-1.5 py-0.2 text-[9px] text-slate-300 font-mono">
+                                    {p.framework}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
+                                <span>Updated: {new Date(p.updatedAt).toLocaleDateString()}</span>
+                                {latest && (
+                                  <span className={`rounded border px-1.5 py-0.2 uppercase font-mono text-[9px] ${stateColor}`}>
+                                    {latest.readyState}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Selected project deployment status banner */}
+                    {selectedProject && (
+                      <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/70 p-3 flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-mono font-medium text-violet-300">
+                            Selected: <strong>{selectedProject.name}</strong>
+                          </span>
+                          {selectedProject.productionUrl && (
+                            <a
+                              href={selectedProject.productionUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[10px] text-slate-400 hover:text-slate-200 underline"
+                            >
+                              {selectedProject.productionUrl.replace('https://', '')} ↗
+                            </a>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => fetchProjectLogs(selectedProjectId)}
+                            disabled={isLoadingLogs}
+                            className="rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2.5 py-1 text-xs text-slate-200 transition"
+                          >
+                            {isLoadingLogs ? 'Fetching…' : '↻ Fetch Real Logs'}
+                          </button>
+                          <button
+                            onClick={handleLoadSimulatedOutage}
+                            className="rounded bg-amber-950/40 hover:bg-amber-900/50 border border-amber-700/50 px-2.5 py-1 text-xs text-amber-300 transition"
+                            title="Inject a simulated outage for this project to test the AI agent without breaking live traffic"
+                          >
+                            ⚡ Inject Test Outage
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Real Logs Terminal & Stream Viewer */}
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-slate-300">Live Log Stream</span>
+                        {logStats && (
+                          <div className="flex items-center gap-1.5 text-[10px]">
+                            <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-400">
+                              {logStats.total} lines
+                            </span>
+                            {logStats.errors > 0 && (
+                              <span className="rounded bg-rose-950/80 border border-rose-700/60 px-1.5 py-0.5 text-rose-300 font-semibold">
+                                {logStats.errors} errors
+                              </span>
+                            )}
+                            {logStats.warns > 0 && (
+                              <span className="rounded bg-amber-950/80 border border-amber-700/60 px-1.5 py-0.5 text-amber-300">
+                                {logStats.warns} warnings
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {/* Filter buttons */}
+                        <div className="flex rounded border border-slate-800 overflow-hidden text-[10px]">
+                          {(['all', 'error', 'warn'] as const).map(lvl => (
+                            <button
+                              key={lvl}
+                              onClick={() => setLogFilter(lvl)}
+                              className={`px-2 py-0.5 uppercase font-medium transition ${
+                                logFilter === lvl
+                                  ? 'bg-violet-700 text-white'
+                                  : 'bg-slate-900 text-slate-400 hover:bg-slate-800'
+                              }`}
+                            >
+                              {lvl}
+                            </button>
+                          ))}
+                        </div>
+                        {/* Query filter */}
+                        <input
+                          type="text"
+                          placeholder="Search in logs..."
+                          value={logFilterQuery}
+                          onChange={e => setLogFilterQuery(e.target.value)}
+                          className="w-32 rounded border border-slate-800 bg-slate-900 px-2 py-0.5 text-[11px] text-slate-300 placeholder-slate-600 focus:outline-none focus:border-violet-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Terminal Display */}
+                    <div className="h-56 overflow-y-auto rounded-lg border border-slate-850 bg-black/60 p-3 font-mono text-[11px] leading-relaxed select-text space-y-1">
+                      {isLoadingLogs ? (
+                        <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                          Fetching real deployment events and logs from Vercel...
+                        </div>
+                      ) : filteredLogLines.length === 0 ? (
+                        <div className="flex flex-col h-full items-center justify-center text-xs text-slate-500 space-y-2">
+                          <p>No log entries match the current filter.</p>
+                          <button
+                            onClick={handleLoadSimulatedOutage}
+                            className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1 text-slate-300 text-xs transition"
+                          >
+                            Load Simulated Outage Scenario for {selectedProject?.name || 'Project'}
+                          </button>
+                        </div>
+                      ) : (
+                        filteredLogLines.map((line, idx) => {
+                          const isError = /\[ERROR\]|FATAL|UnhandledPromiseRejection|504|500/i.test(line);
+                          const isWarn = /\[WARN\]/i.test(line);
+                          return (
+                            <div
+                              key={idx}
+                              className={`whitespace-pre-wrap break-all ${
+                                isError
+                                  ? 'text-rose-400 bg-rose-950/20 px-1 rounded'
+                                  : isWarn
+                                  ? 'text-amber-300'
+                                  : 'text-slate-300'
+                              }`}
+                            >
+                              {line}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    {/* Vercel Error notice if any */}
+                    {vercelError && (
+                      <div className="rounded-lg border border-rose-800/60 bg-rose-950/40 p-2 text-xs text-rose-300">
+                        ⚠ {vercelError}
+                      </div>
+                    )}
+
+                    {/* Primary Agent Ingestion Action */}
+                    <button
+                      onClick={() => handleIngestLogs(vercelLogs, selectedProject?.name, false)}
+                      disabled={isLoading || !vercelLogs.trim()}
+                      className="w-full rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed py-3 text-sm font-semibold text-white shadow-lg shadow-violet-700/25 transition flex items-center justify-center gap-2"
+                    >
+                      <span>🤖</span>
+                      <span>
+                        {isLoading
+                          ? 'APEX Agent Analyzing & Correlating Logs…'
+                          : `Investigate ${selectedProject?.name || 'Project'} Logs with APEX Agent`}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Submit */}
-          <button
-            onClick={handleIngest}
-            disabled={isLoading || !logContent.trim()}
-            className="w-full rounded-lg bg-violet-700 hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-violet-700/30 transition"
-          >
-            {isLoading ? 'Analysing logs…' : 'Investigate Logs'}
-          </button>
+          {/* ---------------------------------------------------------------- */}
+          {/* SUB-VIEW B: MANUAL / FILE UPLOAD                                  */}
+          {/* ---------------------------------------------------------------- */}
+          {inputMode === 'manual' && (
+            <div className="space-y-4">
+              {/* Sample + Format row */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-slate-400">Sample scenario:</span>
+                <div className="flex rounded-md border border-slate-700 overflow-hidden text-xs">
+                  {(['txt', 'json', 'csv'] as SampleFormat[]).map(f => (
+                    <button
+                      key={f}
+                      onClick={() => setSampleFormat(f)}
+                      className={`px-2.5 py-1 uppercase font-mono transition ${
+                        sampleFormat === f ? 'bg-violet-700 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                      }`}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={loadSample}
+                  className="rounded bg-violet-700 hover:bg-violet-600 px-3 py-1 text-xs font-medium text-white transition"
+                >
+                  Load Sample Logs
+                </button>
+                <span className="text-[10px] text-amber-400 italic">⚠ Simulated data</span>
+              </div>
+
+              {/* File Upload */}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3 py-1 text-xs text-slate-300 transition"
+                >
+                  Upload .txt / .json / .csv
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".txt,.log,.json,.csv"
+                  className="hidden"
+                  onChange={handleFileUpload}
+                />
+                <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                  <span>Format:</span>
+                  <select
+                    value={format}
+                    onChange={e => setFormat(e.target.value as typeof format)}
+                    className="rounded bg-slate-800 border border-slate-700 px-2 py-0.5 text-slate-300 text-xs"
+                  >
+                    <option value="auto">Auto-detect</option>
+                    <option value="txt">TXT / Plain</option>
+                    <option value="json">JSON / NDJSON</option>
+                    <option value="csv">CSV</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Textarea */}
+              <textarea
+                className="w-full min-h-[200px] rounded-lg border border-slate-700 bg-slate-900/80 p-3 text-xs font-mono text-slate-300 placeholder-slate-600 resize-none focus:outline-none focus:border-violet-500 transition"
+                placeholder={`Paste system logs here (TXT, JSON, or CSV)…\n\nExample:\n2026-11-07T04:00:03Z [ERROR] [postgres-primary] FATAL: connection pool exhausted\n2026-11-07T04:00:12Z [ERROR] [backend-api] connect ECONNREFUSED 127.0.0.1:5432`}
+                value={logContent}
+                onChange={e => setLogContent(e.target.value)}
+                spellCheck={false}
+              />
+
+              {/* Char count */}
+              <div className="flex items-center justify-between text-[10px] text-slate-500">
+                <span>{logContent.length.toLocaleString()} characters · {logContent.split('\n').filter(Boolean).length} lines</span>
+                {logContent && (
+                  <button onClick={() => setLogContent('')} className="text-slate-500 hover:text-slate-300 transition">
+                    Clear
+                  </button>
+                )}
+              </div>
+
+              {/* Submit */}
+              <button
+                onClick={() => handleIngestLogs(logContent, 'manual-input', false)}
+                disabled={isLoading || !logContent.trim()}
+                className="w-full rounded-lg bg-violet-700 hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-violet-700/30 transition"
+              >
+                {isLoading ? 'Analysing logs…' : 'Investigate Logs with APEX'}
+              </button>
+            </div>
+          )}
+
+          {/* General Error notice */}
+          {error && (
+            <div className="rounded-lg border border-rose-800/60 bg-rose-950/40 p-3 text-xs text-rose-300">
+              ⚠ {error}
+            </div>
+          )}
         </div>
       )}
 
       {/* ------------------------------------------------------------------ */}
-      {/* REPORT TAB                                                           */}
+      {/* TAB 2: INVESTIGATION REPORT                                        */}
       {/* ------------------------------------------------------------------ */}
       {activeTab === 'report' && report && (
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
@@ -347,7 +1016,7 @@ export default function LogInvestigationPanel({ onSelectIncident }: LogInvestiga
           {/* Simulated banner */}
           {report.isSimulated && (
             <div className="rounded-lg border border-amber-700/50 bg-amber-950/30 px-4 py-2 text-xs text-amber-300 font-medium">
-              ⚠️ SIMULATED DATA — These logs are fictional and produced for demonstration purposes only.
+              ⚠️ SIMULATED DATA — These logs were generated for demonstration and testing purposes.
             </div>
           )}
 
@@ -372,7 +1041,7 @@ export default function LogInvestigationPanel({ onSelectIncident }: LogInvestiga
             <p className="text-xs text-slate-200 leading-relaxed">{report.probableRootCause}</p>
             {report.rootCauseService && (
               <span className="mt-2 inline-block rounded bg-rose-900/40 border border-rose-700/40 px-2 py-0.5 text-[10px] font-mono text-rose-300">
-                Origin: {report.rootCauseService}
+                Origin Service: {report.rootCauseService}
               </span>
             )}
           </div>
@@ -381,7 +1050,7 @@ export default function LogInvestigationPanel({ onSelectIncident }: LogInvestiga
           {report.cascade.length > 0 && (
             <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-                Cascade Chain
+                Service Failure Cascade
               </h4>
               <div className="space-y-2">
                 {report.cascade.map((node, idx) => (
@@ -419,7 +1088,7 @@ export default function LogInvestigationPanel({ onSelectIncident }: LogInvestiga
           {report.chronologicalEvidence.length > 0 && (
             <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-                Chronological Evidence ({report.chronologicalEvidence.length} key events)
+                Chronological Evidence ({report.chronologicalEvidence.length} events)
               </h4>
               <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
                 {report.chronologicalEvidence.map((e, i) => (
@@ -441,7 +1110,7 @@ export default function LogInvestigationPanel({ onSelectIncident }: LogInvestiga
           {report.incidentsCreated.length > 0 && (
             <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-                Incidents Registered ({report.incidentsCreated.length})
+                Registered Incidents ({report.incidentsCreated.length})
               </h4>
               <div className="space-y-1.5">
                 {report.incidentsCreated.map(inc => (
@@ -456,7 +1125,7 @@ export default function LogInvestigationPanel({ onSelectIncident }: LogInvestiga
                       <span className="text-slate-200 font-medium">{inc.title}</span>
                       <span className="ml-2 text-slate-500 font-mono text-[10px]">{inc.affectedService}</span>
                       {onSelectIncident && (
-                        <span className="ml-2 text-[10px] text-violet-400 hover:underline">Inspect →</span>
+                        <span className="ml-2 text-[10px] text-violet-400 hover:underline">Open in Gemini AI Inspector →</span>
                       )}
                     </div>
                     <span className={`rounded border px-1.5 py-0.5 text-[9px] font-semibold uppercase ${SEVERITY_COLORS[inc.severity] || SEVERITY_COLORS.low}`}>
@@ -468,7 +1137,7 @@ export default function LogInvestigationPanel({ onSelectIncident }: LogInvestiga
             </div>
           )}
 
-          {/* Remediation Steps */}
+          {/* Remediation Recommendations */}
           {report.remediationSteps.length > 0 && (
             <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
@@ -478,17 +1147,28 @@ export default function LogInvestigationPanel({ onSelectIncident }: LogInvestiga
                 {report.remediationSteps.map((step, i) => {
                   const isWarning = step.startsWith('⚠️');
                   const tag = step.match(/^\[([^\]]+)\]/)?.[1];
-                  const tagColor = tag === 'RECOVERY' ? 'text-emerald-400' : tag === 'CONFIGURATION' ? 'text-blue-400' : tag === 'MONITORING' ? 'text-violet-400' : 'text-slate-400';
+                  const tagColor =
+                    tag === 'RECOVERY'
+                      ? 'text-emerald-400'
+                      : tag === 'CONFIGURATION'
+                      ? 'text-blue-400'
+                      : tag === 'MONITORING'
+                      ? 'text-violet-400'
+                      : 'text-slate-400';
                   return (
                     <div
                       key={i}
-                      className={`flex gap-2 items-start rounded px-3 py-2 text-xs ${isWarning ? 'bg-amber-950/30 border border-amber-800/40 text-amber-300' : 'bg-slate-900/60 border border-slate-700/40'}`}
+                      className={`flex gap-2 items-start rounded px-3 py-2 text-xs ${
+                        isWarning ? 'bg-amber-950/30 border border-amber-800/40 text-amber-300' : 'bg-slate-900/60 border border-slate-700/40'
+                      }`}
                     >
-                      {!isWarning && <span className="shrink-0 text-slate-600 font-mono text-[10px] mt-0.5">{String(i + 1).padStart(2, '0')}</span>}
+                      {!isWarning && (
+                        <span className="shrink-0 text-slate-600 font-mono text-[10px] mt-0.5">
+                          {String(i + 1).padStart(2, '0')}
+                        </span>
+                      )}
                       <span>
-                        {tag && !isWarning && (
-                          <span className={`font-semibold ${tagColor}`}>[{tag}] </span>
-                        )}
+                        {tag && !isWarning && <span className={`font-semibold ${tagColor}`}>[{tag}] </span>}
                         <span className={isWarning ? '' : 'text-slate-300'}>
                           {step.replace(/^\[[^\]]+\] /, '')}
                         </span>
@@ -500,7 +1180,7 @@ export default function LogInvestigationPanel({ onSelectIncident }: LogInvestiga
             </div>
           )}
 
-          {/* Export buttons */}
+          {/* Actions */}
           <div className="flex gap-2 pt-1">
             <button
               onClick={() => downloadFile(reportToMarkdown(report), `apex-report-${report.id.slice(0, 8)}.md`, 'text/markdown')}
@@ -518,7 +1198,7 @@ export default function LogInvestigationPanel({ onSelectIncident }: LogInvestiga
               onClick={() => { setActiveTab('input'); }}
               className="rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs font-medium text-slate-300 transition"
             >
-              New
+              Back to Ingestion
             </button>
           </div>
         </div>

@@ -12,11 +12,11 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@apex/shared": "workspace:*"
+    "@apex/shared": "workspace:*",
+    "@supabase/supabase-js": "^2.119.0"
   },
   "devDependencies": {
     "typescript": "^5.8.2",
     "vitest": "^3.0.7"
   }
 }
-

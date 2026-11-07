@@ -10,6 +10,7 @@
     "dev:server": "pnpm --filter \"@apex/server\" run dev",
     "dev:desktop": "pnpm --filter \"@apex/desktop\" run dev:renderer",
     "dev:mobile": "pnpm --filter \"@apex/mobile\" run dev",
+    "status": "node scripts/status.js",
     "clean": "pnpm -r run clean"
   },
   "pnpm": {
