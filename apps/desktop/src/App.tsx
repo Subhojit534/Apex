@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Incident, WsServerMessage, WsClientMessage, SystemInfo } from '@apex/shared';
+import LogInvestigationPanel from './LogInvestigationPanel';
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3001/ws';
 const API_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
@@ -11,8 +12,27 @@ export default function App() {
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [aiAnalysisMap, setAiAnalysisMap] = useState<Record<string, { analysis: string; rootCause: string; mitigations: string[] }>>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [viewMode, setViewMode] = useState<'inspector' | 'logs'>('inspector');
 
   const socketRef = useRef<WebSocket | null>(null);
+
+  const handleSelectIncidentFromLog = (incidentId: string) => {
+    const target = incidents.find((i) => i.id === incidentId);
+    if (target) {
+      setSelectedIncident(target);
+      setViewMode('inspector');
+    } else {
+      fetch(`${API_URL}/api/incidents/${incidentId}`)
+        .then((res) => res.json())
+        .then((d) => {
+          if (d.success && d.data) {
+            setSelectedIncident(d.data);
+            setViewMode('inspector');
+          }
+        })
+        .catch((err) => console.warn('Could not fetch incident:', err));
+    }
+  };
 
   // Check Electron Preload API
   useEffect(() => {
@@ -155,6 +175,33 @@ export default function App() {
           </div>
         </div>
 
+        {/* Center: View Switcher */}
+        <div className="flex items-center space-x-1 rounded-lg bg-slate-950 p-1 border border-slate-800">
+          <button
+            onClick={() => setViewMode('inspector')}
+            className={`rounded px-3 py-1 text-xs font-medium transition ${
+              viewMode === 'inspector'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Incident Inspector
+          </button>
+          <button
+            onClick={() => setViewMode('logs')}
+            className={`rounded px-3 py-1 text-xs font-medium transition flex items-center space-x-1.5 ${
+              viewMode === 'logs'
+                ? 'bg-violet-600 text-white shadow-md shadow-violet-600/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>Log Investigation</span>
+            <span className="rounded bg-violet-900/60 border border-violet-700/50 px-1.5 py-0.2 text-[9px] font-mono text-violet-300">
+              Pipeline
+            </span>
+          </button>
+        </div>
+
         {/* Status Indicators */}
         <div className="flex items-center space-x-4 text-xs">
           {systemInfo && (
@@ -216,7 +263,10 @@ export default function App() {
                 return (
                   <div
                     key={incident.id}
-                    onClick={() => setSelectedIncident(incident)}
+                    onClick={() => {
+                      setSelectedIncident(incident);
+                      setViewMode('inspector');
+                    }}
                     className={`cursor-pointer rounded-lg border p-3 transition-all ${
                       isSelected
                         ? 'border-indigo-500 bg-indigo-950/30'
@@ -246,9 +296,14 @@ export default function App() {
           </div>
         </section>
 
-        {/* Right: Selected Incident Inspector & AI Remediation */}
-        <section className="flex flex-1 flex-col overflow-y-auto bg-slate-950 p-6">
-          {selectedIncident ? (
+        {/* Right: Log Investigation OR Selected Incident Inspector */}
+        {viewMode === 'logs' ? (
+          <section className="flex flex-1 flex-col overflow-hidden bg-slate-950">
+            <LogInvestigationPanel onSelectIncident={handleSelectIncidentFromLog} />
+          </section>
+        ) : (
+          <section className="flex flex-1 flex-col overflow-y-auto bg-slate-950 p-6">
+            {selectedIncident ? (
             <div className="max-w-4xl space-y-6">
               {/* Incident Header */}
               <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5 shadow-sm">
@@ -364,6 +419,7 @@ export default function App() {
             </div>
           )}
         </section>
+        )}
       </div>
     </div>
   );

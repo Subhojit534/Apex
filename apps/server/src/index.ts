@@ -4,6 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { healthRouter } from './routes/health';
 import { createIncidentsRouter } from './routes/incidents';
+import { createLogsRouter } from './routes/logs';
 import { ApexWebSocketManager } from './websocket';
 
 dotenv.config();
@@ -21,6 +22,7 @@ export const wsManager = new ApexWebSocketManager(server);
 app.use('/', healthRouter);
 app.use('/api', healthRouter);
 app.use('/api', createIncidentsRouter(wsManager));
+app.use('/api', createLogsRouter(wsManager));
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '0.0.0.0';
