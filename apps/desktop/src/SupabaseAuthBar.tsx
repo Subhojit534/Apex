@@ -29,6 +29,12 @@ export default function SupabaseAuthBar({
   const [showConfigModal, setShowConfigModal] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  const onUserChangeRef = React.useRef(onUserChange);
+  onUserChangeRef.current = onUserChange;
+
+  const onVercelTokenSyncedRef = React.useRef(onVercelTokenSynced);
+  onVercelTokenSyncedRef.current = onVercelTokenSynced;
+
   // Dynamic credentials from localStorage, env, or defaults
   const [supabaseUrl, setSupabaseUrl] = useState<string>(() => {
     return (
@@ -64,12 +70,12 @@ export default function SupabaseAuthBar({
     client.auth.getSession().then(({ data }) => {
       const currentUser = data.session?.user || null;
       setUser(currentUser);
-      onUserChange?.(currentUser, client);
+      onUserChangeRef.current?.(currentUser, client);
 
       if (currentUser) {
         fetchUserIntegration(client, currentUser.id, 'vercel').then((integration) => {
           if (integration && integration.token) {
-            onVercelTokenSynced?.(integration.token, integration.teamId || undefined);
+            onVercelTokenSyncedRef.current?.(integration.token, integration.teamId || undefined);
           }
         });
       }
@@ -81,12 +87,15 @@ export default function SupabaseAuthBar({
       async (event, session) => {
         const authUser = session?.user || null;
         setUser(authUser);
-        onUserChange?.(authUser, client);
+        onUserChangeRef.current?.(authUser, client);
 
         if (authUser && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
+          if (typeof window !== 'undefined' && (window.location.hash || window.location.search.includes('code='))) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
           const integration = await fetchUserIntegration(client, authUser.id, 'vercel');
           if (integration && integration.token) {
-            onVercelTokenSynced?.(integration.token, integration.teamId || undefined);
+            onVercelTokenSyncedRef.current?.(integration.token, integration.teamId || undefined);
           }
         }
       }
@@ -95,7 +104,7 @@ export default function SupabaseAuthBar({
     return () => {
       authListener.subscription.unsubscribe();
     };
-  }, [onUserChange, onVercelTokenSynced]);
+  }, []);
 
   useEffect(() => {
     const cleanup = initClient(supabaseUrl, supabaseAnonKey);
@@ -217,6 +226,19 @@ export default function SupabaseAuthBar({
               title="Supabase Settings"
             >
               ⚙
+            </button>
+          </div>
+        )}
+
+        {authError && (
+          <div className="flex items-center gap-1.5 rounded-lg border border-rose-800/80 bg-rose-950/90 px-2.5 py-1 text-xs text-rose-200 shadow-md">
+            <span>⚠ {authError}</span>
+            <button
+              onClick={() => setAuthError(null)}
+              className="ml-1 text-rose-400 hover:text-white text-xs font-bold"
+              title="Dismiss error"
+            >
+              ✕
             </button>
           </div>
         )}

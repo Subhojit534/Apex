@@ -10,9 +10,15 @@ import {
 } from '@apex/shared';
 import MobileSupabaseAuthBar from './SupabaseAuthBar';
 
+const isLocal = typeof window !== 'undefined' && (
+  window.location.hostname === 'localhost' ||
+  window.location.hostname === '127.0.0.1' ||
+  window.location.hostname.startsWith('192.168.') ||
+  window.location.hostname.startsWith('10.')
+);
 const currentHost = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
-const WS_URL = import.meta.env.VITE_WS_URL || `ws://${currentHost}:3001/ws`;
-const API_URL = import.meta.env.VITE_SERVER_URL || `http://${currentHost}:3001`;
+const WS_URL = import.meta.env.VITE_WS_URL || (isLocal ? `ws://${currentHost}:3001/ws` : `${typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${typeof window !== 'undefined' ? window.location.host : 'localhost'}/ws`);
+const API_URL = import.meta.env.VITE_SERVER_URL || (isLocal ? `http://${currentHost}:3001` : (typeof window !== 'undefined' ? window.location.origin : ''));
 
 export default function App() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -24,6 +30,22 @@ export default function App() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [supabaseClient, setSupabaseClient] = useState<SupabaseClient | null>(null);
 
+  const handleUserChange = useCallback((u: User | null, client: SupabaseClient | null) => {
+    setAuthUser(u);
+    setSupabaseClient(client);
+    if (u && client) {
+      fetchUserIncidentsFromSupabase(client, u.id).then((synced) => {
+        if (synced && synced.length > 0) {
+          setIncidents((prev) => {
+            const map = new Map(prev.map(i => [i.id, i]));
+            synced.forEach(s => map.set(s.id, s));
+            return Array.from(map.values());
+          });
+        }
+      });
+    }
+  }, []);
+
   const handleVercelTokenSynced = useCallback((token: string, teamId?: string) => {
     fetch(`${API_URL}/api/vercel/token`, {
       method: 'POST',
@@ -33,13 +55,20 @@ export default function App() {
   }, []);
 
   const socketRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<any>(null);
+  const isUnmountedRef = useRef(false);
 
   const connectWs = useCallback(() => {
+    if (isUnmountedRef.current) return;
     setWsStatus('connecting');
     const ws = new WebSocket(WS_URL);
     socketRef.current = ws;
 
     ws.onopen = () => {
+      if (isUnmountedRef.current) {
+        ws.close();
+        return;
+      }
       setWsStatus('connected');
       const subscribeMsg: WsClientMessage = { type: 'subscribe_incidents' };
       ws.send(JSON.stringify(subscribeMsg));
@@ -77,7 +106,9 @@ export default function App() {
 
     ws.onclose = () => {
       setWsStatus('disconnected');
-      setTimeout(connectWs, 3000);
+      if (!isUnmountedRef.current) {
+        reconnectTimeoutRef.current = setTimeout(connectWs, 3000);
+      }
     };
 
     ws.onerror = (err) => {
@@ -87,8 +118,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    isUnmountedRef.current = false;
     connectWs();
     return () => {
+      isUnmountedRef.current = true;
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       socketRef.current?.close();
     };
   }, [connectWs]);
@@ -183,21 +217,7 @@ export default function App() {
 
       {/* Supabase Google Auth Sync Bar */}
       <MobileSupabaseAuthBar
-        onUserChange={(u, client) => {
-          setAuthUser(u);
-          setSupabaseClient(client);
-          if (u && client) {
-            fetchUserIncidentsFromSupabase(client, u.id).then((synced) => {
-              if (synced && synced.length > 0) {
-                setIncidents((prev) => {
-                  const map = new Map(prev.map(i => [i.id, i]));
-                  synced.forEach(s => map.set(s.id, s));
-                  return Array.from(map.values());
-                });
-              }
-            });
-          }
-        }}
+        onUserChange={handleUserChange}
         onVercelTokenSynced={handleVercelTokenSynced}
       />
 

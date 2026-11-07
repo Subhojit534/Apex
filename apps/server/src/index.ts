@@ -23,6 +23,10 @@ app.use((req, res, next) => {
   res.on('finish', () => {
     const duration = Date.now() - start;
     const status = res.statusCode;
+    // Suppress repetitive 304 cached poll logs to keep terminal clean
+    if (status === 304 && req.originalUrl.startsWith('/api/incidents')) {
+      return;
+    }
     console.log(`[${time}] [HTTP] ${req.method.padEnd(6)} ${req.originalUrl} -> ${status} (${duration}ms)`);
   });
   next();
@@ -41,11 +45,13 @@ app.use('/api/vercel', createVercelRouter(wsManager));
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 
-server.listen(PORT, HOST, () => {
-  console.log(`[APEX Server] Running on http://${HOST}:${PORT}`);
-  console.log(`[APEX Server] WebSocket available at ws://${HOST}:${PORT}/ws`);
-  console.log(`[APEX Server] Health endpoint: http://${HOST}:${PORT}/health`);
-});
+if (!process.env.VERCEL) {
+  server.listen(PORT, HOST, () => {
+    console.log(`[APEX Server] Running on http://${HOST}:${PORT}`);
+    console.log(`[APEX Server] WebSocket available at ws://${HOST}:${PORT}/ws`);
+    console.log(`[APEX Server] Health endpoint: http://${HOST}:${PORT}/health`);
+  });
+}
 
 export { app, server };
 

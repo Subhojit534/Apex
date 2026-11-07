@@ -1,0 +1,32 @@
+{
+  "version": 2,
+  "buildCommand": "node scripts/build-vercel.js",
+  "outputDirectory": "apps/desktop/dist",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/api",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/health",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/mobile/(.*)",
+      "destination": "/mobile/$1"
+    },
+    {
+      "source": "/mobile",
+      "destination": "/mobile/index.html"
+    },
+    {
+      "source": "/((?!api|mobile).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

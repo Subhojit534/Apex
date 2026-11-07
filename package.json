@@ -5,6 +5,7 @@
   "description": "APEX — Autonomous Platform for Engineering eXcellence",
   "scripts": {
     "build": "pnpm -r run build",
+    "build:vercel": "node scripts/build-vercel.js",
     "test": "pnpm --filter \"@apex/incident-core\" run test",
     "typecheck": "pnpm -r run typecheck",
     "dev:server": "pnpm --filter \"@apex/server\" run dev",

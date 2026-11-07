@@ -14,8 +14,14 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { User, SupabaseClient, saveUserIntegration, syncIncidentToSupabase } from '@apex/shared';
 import { SAMPLE_TXT_LOGS, SAMPLE_JSON_LOGS, SAMPLE_CSV_LOGS } from './sampleLogs';
 
+const isLocal = typeof window !== 'undefined' && (
+  window.location.hostname === 'localhost' ||
+  window.location.hostname === '127.0.0.1' ||
+  window.location.hostname.startsWith('192.168.') ||
+  window.location.hostname.startsWith('10.')
+);
 const currentHost = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
-const API_URL = import.meta.env.VITE_SERVER_URL || `http://${currentHost}:3001`;
+const API_URL = import.meta.env.VITE_SERVER_URL || (isLocal ? `http://${currentHost}:3001` : (typeof window !== 'undefined' ? window.location.origin : ''));
 
 // ---------------------------------------------------------------------------
 // Types

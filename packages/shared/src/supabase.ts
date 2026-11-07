@@ -41,8 +41,10 @@ export function getSupabaseEnvConfig(): { url: string | null; anonKey: string | 
   return { url, anonKey };
 }
 
+const clientCache = new Map<string, SupabaseClient>();
+
 /**
- * Creates or retrieves a typed Supabase client.
+ * Creates or retrieves a typed Supabase client (cached by URL + key).
  * Returns null if Supabase URL and Key are not yet configured.
  */
 export function createApexSupabaseClient(
@@ -57,14 +59,22 @@ export function createApexSupabaseClient(
     return null;
   }
 
+  const cacheKey = `${url}::${anonKey}`;
+  const existing = clientCache.get(cacheKey);
+  if (existing) {
+    return existing;
+  }
+
   try {
-    return createClient(url, anonKey, {
+    const client = createClient(url, anonKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,
       },
     });
+    clientCache.set(cacheKey, client);
+    return client;
   } catch (err) {
     console.warn('[Supabase] Failed to initialize client:', err);
     return null;
@@ -83,7 +93,7 @@ export async function signInWithGoogle(
       redirectTo ||
       (typeof window !== 'undefined' ? `${window.location.origin}` : undefined);
 
-    const { error } = await client.auth.signInWithOAuth({
+    const { data, error } = await client.auth.signInWithOAuth({
       provider: 'google',
       options: {
         redirectTo: redirect,
@@ -94,7 +104,15 @@ export async function signInWithGoogle(
       },
     });
 
-    return { error: error ? new Error(error.message) : null };
+    if (error) {
+      return { error: new Error(error.message) };
+    }
+
+    if (data?.url && typeof window !== 'undefined') {
+      window.location.assign(data.url);
+    }
+
+    return { error: null };
   } catch (err: unknown) {
     return { error: err instanceof Error ? err : new Error(String(err)) };
   }

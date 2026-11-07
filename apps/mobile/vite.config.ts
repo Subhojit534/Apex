@@ -10,6 +10,7 @@ export default defineConfig({
       '@apex/shared': path.resolve(__dirname, '../../packages/shared/src'),
     },
   },
+  base: process.env.VERCEL ? '/mobile/' : '/',
   server: {
     host: true,
     port: 5174,

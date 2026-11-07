@@ -29,6 +29,12 @@ export default function MobileSupabaseAuthBar({
   const [showConfigModal, setShowConfigModal] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  const onUserChangeRef = React.useRef(onUserChange);
+  onUserChangeRef.current = onUserChange;
+
+  const onVercelTokenSyncedRef = React.useRef(onVercelTokenSynced);
+  onVercelTokenSyncedRef.current = onVercelTokenSynced;
+
   const [supabaseUrl, setSupabaseUrl] = useState<string>(() => {
     return (
       (typeof window !== 'undefined' ? localStorage.getItem('apex_supabase_url') : '') ||
@@ -61,12 +67,12 @@ export default function MobileSupabaseAuthBar({
     client.auth.getSession().then(({ data }) => {
       const currentUser = data.session?.user || null;
       setUser(currentUser);
-      onUserChange?.(currentUser, client);
+      onUserChangeRef.current?.(currentUser, client);
 
       if (currentUser) {
         fetchUserIntegration(client, currentUser.id, 'vercel').then((integration) => {
           if (integration && integration.token) {
-            onVercelTokenSynced?.(integration.token, integration.teamId || undefined);
+            onVercelTokenSyncedRef.current?.(integration.token, integration.teamId || undefined);
           }
         });
       }
@@ -77,12 +83,15 @@ export default function MobileSupabaseAuthBar({
       async (event, session) => {
         const authUser = session?.user || null;
         setUser(authUser);
-        onUserChange?.(authUser, client);
+        onUserChangeRef.current?.(authUser, client);
 
         if (authUser && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
+          if (typeof window !== 'undefined' && (window.location.hash || window.location.search.includes('code='))) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
           const integration = await fetchUserIntegration(client, authUser.id, 'vercel');
           if (integration && integration.token) {
-            onVercelTokenSynced?.(integration.token, integration.teamId || undefined);
+            onVercelTokenSyncedRef.current?.(integration.token, integration.teamId || undefined);
           }
         }
       }
@@ -91,7 +100,7 @@ export default function MobileSupabaseAuthBar({
     return () => {
       authListener.subscription.unsubscribe();
     };
-  }, [onUserChange, onVercelTokenSynced]);
+  }, []);
 
   useEffect(() => {
     const cleanup = initClient(supabaseUrl, supabaseAnonKey);
